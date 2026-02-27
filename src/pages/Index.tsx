@@ -17,7 +17,7 @@ export default function Index() {
   const [lastDigit, setLastDigit] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("idle");
   const [latencies, setLatencies] = useState<number[]>([]);
-  const [showUpcoming, setShowUpcoming] = useState(true);
+  const [showUpcoming, setShowUpcoming] = useState(false);
   const [flippedNumpad, setFlippedNumpad] = useState(false);
   const lastTapTime = useRef<number>(0);
   const sessionStart = useRef<number>(0);
@@ -136,7 +136,7 @@ export default function Index() {
       {/* Digit display */}
       <div className="flex-1 flex items-center">
         {mode === "practice" ? (
-          <DigitStream currentIndex={currentIndex} showDigits={showUpcoming} />
+          <DigitStream currentIndex={currentIndex} showUpcoming={showUpcoming} />
         ) : (
           <div className="text-center space-y-4 fade-in">
             <div className="text-6xl font-bold text-gradient-amber">
@@ -181,7 +181,7 @@ export default function Index() {
                 onClick={() => setShowUpcoming((v) => !v)}
                 className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 border border-border rounded"
               >
-                {showUpcoming ? "hide" : "show"} upcoming
+                {showUpcoming ? "hide" : "unhide"} digits
               </button>
               <button
                 onClick={() => setFlippedNumpad((v) => !v)}
