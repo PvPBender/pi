@@ -5,16 +5,25 @@ interface NumpadProps {
   lastResult: "correct" | "error" | null;
   lastDigit: string | null;
   disabled?: boolean;
+  flipped?: boolean;
 }
 
-const ROWS = [
+const ROWS_NORMAL = [
   ["1", "2", "3"],
   ["4", "5", "6"],
   ["7", "8", "9"],
   [null, "0", null],
 ];
 
-export default function Numpad({ onDigit, lastResult, lastDigit, disabled }: NumpadProps) {
+const ROWS_FLIPPED = [
+  ["7", "8", "9"],
+  ["4", "5", "6"],
+  ["1", "2", "3"],
+  [null, "0", null],
+];
+
+export default function Numpad({ onDigit, lastResult, lastDigit, disabled, flipped }: NumpadProps) {
+  const ROWS = flipped ? ROWS_FLIPPED : ROWS_NORMAL;
   const handleClick = useCallback(
     (digit: string) => {
       if (!disabled) onDigit(digit);
