@@ -36,7 +36,7 @@ export default function DigitStream({ currentIndex, showUpcoming }: DigitStreamP
               {absIndex < currentIndex
                 ? d
                 : absIndex === currentIndex
-                ? "?"
+                ? (showUpcoming ? d : "?")
                 : showUpcoming
                 ? d
                 : "·"}
