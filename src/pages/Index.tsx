@@ -26,9 +26,12 @@ export default function Index() {
   const avgLatency =
     latencies.length > 0 ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null;
 
-  const startPractice = useCallback(() => {
+  const WARMUP_DIGITS = 10;
+
+  const startPractice = useCallback((fromBest = false) => {
+    const startIdx = fromBest ? Math.max(0, state.bestDigit - WARMUP_DIGITS) : 0;
     setMode("practice");
-    setCurrentIndex(0);
+    setCurrentIndex(startIdx);
     setStreak(0);
     setErrors(0);
     setLatencies([]);
@@ -36,8 +39,8 @@ export default function Index() {
     setLastDigit(null);
     lastTapTime.current = performance.now();
     sessionStart.current = performance.now();
-    highestReached.current = 0;
-  }, []);
+    highestReached.current = startIdx;
+  }, [state.bestDigit]);
 
   const endSession = useCallback(() => {
     const session: SessionRecord = {
