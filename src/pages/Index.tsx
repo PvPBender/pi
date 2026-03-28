@@ -148,14 +148,25 @@ export default function Index() {
             <div className="text-xs text-muted-foreground tracking-widest uppercase">
               digits memorized
             </div>
-            <button
-              onClick={startPractice}
-              className="mt-4 px-6 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
-            >
-              START
-            </button>
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => startPractice(false)}
+                className="px-5 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
+              >
+                FROM 0
+              </button>
+              <button
+                onClick={() => startPractice(true)}
+                className="px-5 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
+              >
+                CONTINUE
+              </button>
+            </div>
             <div className="text-[10px] text-muted-foreground mt-2">
-              enter · start &nbsp;&nbsp; esc · stop
+              continue starts {WARMUP_DIGITS} digits before your best
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-1">
+              enter · continue &nbsp;&nbsp; esc · stop
             </div>
           </div>
         )}
