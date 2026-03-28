@@ -26,9 +26,12 @@ export default function Index() {
   const avgLatency =
     latencies.length > 0 ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null;
 
-  const startPractice = useCallback(() => {
+  const WARMUP_DIGITS = 10;
+
+  const startPractice = useCallback((fromBest = false) => {
+    const startIdx = fromBest ? Math.max(0, state.bestDigit - WARMUP_DIGITS) : 0;
     setMode("practice");
-    setCurrentIndex(0);
+    setCurrentIndex(startIdx);
     setStreak(0);
     setErrors(0);
     setLatencies([]);
@@ -36,8 +39,8 @@ export default function Index() {
     setLastDigit(null);
     lastTapTime.current = performance.now();
     sessionStart.current = performance.now();
-    highestReached.current = 0;
-  }, []);
+    highestReached.current = startIdx;
+  }, [state.bestDigit]);
 
   const endSession = useCallback(() => {
     const session: SessionRecord = {
@@ -114,7 +117,7 @@ export default function Index() {
       if (mode === "practice" && /^[0-9]$/.test(e.key)) {
         handleDigit(e.key);
       } else if (mode === "idle" && e.key === "Enter") {
-        startPractice();
+        startPractice(true);
       } else if (mode === "practice" && e.key === "Escape") {
         endSession();
       }
@@ -145,14 +148,25 @@ export default function Index() {
             <div className="text-xs text-muted-foreground tracking-widest uppercase">
               digits memorized
             </div>
-            <button
-              onClick={startPractice}
-              className="mt-4 px-6 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
-            >
-              START
-            </button>
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => startPractice(false)}
+                className="px-5 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
+              >
+                FROM 0
+              </button>
+              <button
+                onClick={() => startPractice(true)}
+                className="px-5 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
+              >
+                CONTINUE
+              </button>
+            </div>
             <div className="text-[10px] text-muted-foreground mt-2">
-              enter · start &nbsp;&nbsp; esc · stop
+              continue starts {WARMUP_DIGITS} digits before your best
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-1">
+              enter · continue &nbsp;&nbsp; esc · stop
             </div>
           </div>
         )}
