@@ -117,7 +117,7 @@ export default function Index() {
       if (mode === "practice" && /^[0-9]$/.test(e.key)) {
         handleDigit(e.key);
       } else if (mode === "idle" && e.key === "Enter") {
-        startPractice();
+        startPractice(true);
       } else if (mode === "practice" && e.key === "Escape") {
         endSession();
       }
