@@ -19,7 +19,26 @@ type Phase = "study" | "test" | "result";
 
 interface QueueItem {
   chunkIndex: number;
-  isNew: boolean; // true = first time seeing this chunk
+  isNew: boolean;
+  // Boundary items span across two chunks (overlap drilling)
+  isBoundary?: boolean;
+  boundaryStart?: number; // absolute digit index where the boundary segment starts
+  boundaryLength?: number;
+}
+
+const CHUNK_SIZE = 5;
+// Boundary segments: last 3 of chunk N + first 3 of chunk N+1 = 6 digits crossing the seam
+const BOUNDARY_OVERLAP = 3;
+const BOUNDARY_LENGTH = BOUNDARY_OVERLAP * 2;
+
+function getBoundaryDigits(chunkIndex: number): { digits: string; start: number } {
+  // Get digits that straddle the boundary between chunkIndex and chunkIndex+1
+  const start = chunkIndex * CHUNK_SIZE + (CHUNK_SIZE - BOUNDARY_OVERLAP);
+  return { digits: getPiDigits(start, BOUNDARY_LENGTH), start };
+}
+
+function getChunkDigits(chunkIndex: number): string {
+  return getPiDigits(chunkIndex * CHUNK_SIZE, CHUNK_SIZE);
 }
 
 export default function ChunkLearn({ onBack }: ChunkLearnProps) {
@@ -46,38 +65,72 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     setPhase("study");
   }, []);
 
-  const getChunkDigits = useCallback((chunkIndex: number) => {
-    return getPiDigits(chunkIndex * 5, 5);
-  }, []);
+  const buildFollowUpQueue = useCallback(
+    (state: AppState, justLearnedIdx: number): QueueItem[] => {
+      const items: QueueItem[] = [];
+      const nextIdx = Math.max(state.learnedChunkCount, justLearnedIdx + 1);
+
+      // Add boundary drill if we have at least 2 learned chunks
+      // Drill the boundary between the just-learned chunk and the previous one
+      if (justLearnedIdx > 0) {
+        items.push({
+          chunkIndex: justLearnedIdx - 1,
+          isNew: false,
+          isBoundary: true,
+          boundaryStart: (justLearnedIdx - 1) * CHUNK_SIZE + (CHUNK_SIZE - BOUNDARY_OVERLAP),
+          boundaryLength: BOUNDARY_LENGTH,
+        });
+      }
+
+      // Interleaved reviews of recent chunks
+      for (let i = Math.max(0, nextIdx - 4); i < nextIdx; i++) {
+        const cs = getChunkState(state, i);
+        if (cs.correctStreak < 5) {
+          items.push({ chunkIndex: i, isNew: false });
+        }
+      }
+
+      // After every 3 chunks learned, add a "merge drill" — two consecutive chunks as one 10-digit test
+      if (justLearnedIdx >= 1 && justLearnedIdx % 3 === 0) {
+        // Drill pairs: e.g., after learning chunk 3, drill 0+1, 1+2, 2+3 as merged pairs
+        for (let i = Math.max(0, justLearnedIdx - 2); i < justLearnedIdx; i++) {
+          items.push({
+            chunkIndex: i,
+            isNew: false,
+            isBoundary: true,
+            boundaryStart: i * CHUNK_SIZE,
+            boundaryLength: CHUNK_SIZE * 2, // 10 digits spanning two chunks
+          });
+        }
+      }
+
+      // Add next new chunk
+      items.push({ chunkIndex: nextIdx, isNew: true });
+
+      return items;
+    },
+    []
+  );
 
   const advanceQueue = useCallback(
-    (passed: boolean, failedChunkIndex?: number) => {
+    (passed: boolean, failedItem?: QueueItem) => {
       setQueue((prev) => {
-        let newQueue = [...prev.slice(1)]; // remove current item
+        let newQueue = [...prev.slice(1)];
 
-        if (!passed && failedChunkIndex !== undefined) {
-          // Re-insert failed chunk sooner (after 1-2 items)
+        if (!passed && failedItem) {
+          // Re-insert failed item sooner (after 1-2 items)
           const insertAt = Math.min(2, newQueue.length);
           newQueue.splice(insertAt, 0, {
-            chunkIndex: failedChunkIndex,
+            ...failedItem,
             isNew: false,
           });
         }
 
-        // If queue is getting empty, add next new chunk + interleaved reviews
-        if (newQueue.length < 3) {
+        // If queue is getting low, build more items
+        if (newQueue.filter((q) => q.isNew).length === 0 && newQueue.length < 3) {
           setAppState((st) => {
-            const nextIdx = st.learnedChunkCount;
-            // Add new chunk
-            newQueue.push({ chunkIndex: nextIdx, isNew: true });
-            // Add interleaved reviews of recent chunks
-            for (let i = Math.max(0, nextIdx - 3); i < nextIdx; i++) {
-              const cs = getChunkState(st, i);
-              // Only review if not already mastered (streak < 5)
-              if (cs.correctStreak < 5) {
-                newQueue.push({ chunkIndex: i, isNew: false });
-              }
-            }
+            const followUp = buildFollowUpQueue(st, st.learnedChunkCount - 1);
+            newQueue = [...newQueue, ...followUp];
             return st;
           });
         }
@@ -85,7 +138,7 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         return newQueue;
       });
     },
-    []
+    [buildFollowUpQueue]
   );
 
   const moveToNext = useCallback(() => {
@@ -103,7 +156,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     startTime.current = performance.now();
   }, []);
 
-  // After advanceQueue, move to next item
   useEffect(() => {
     if (!currentItem && queue.length > 0) {
       setCurrentItem(queue[0]);
@@ -119,23 +171,39 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     startTime.current = performance.now();
   }, []);
 
+  const getCurrentDigits = useCallback((): string => {
+    if (!currentItem) return "";
+    if (currentItem.isBoundary && currentItem.boundaryStart !== undefined) {
+      return getPiDigits(currentItem.boundaryStart, currentItem.boundaryLength ?? BOUNDARY_LENGTH);
+    }
+    return getChunkDigits(currentItem.chunkIndex);
+  }, [currentItem]);
+
+  const getCurrentLabel = useCallback((): string => {
+    if (!currentItem) return "";
+    if (currentItem.isBoundary && currentItem.boundaryStart !== undefined) {
+      const len = currentItem.boundaryLength ?? BOUNDARY_LENGTH;
+      const end = currentItem.boundaryStart + len;
+      if (len === CHUNK_SIZE * 2) {
+        return `merge · chunks ${currentItem.chunkIndex + 1}–${currentItem.chunkIndex + 2}`;
+      }
+      return `boundary · digits ${currentItem.boundaryStart + 1}–${end}`;
+    }
+    return `chunk ${currentItem.chunkIndex + 1}`;
+  }, [currentItem]);
+
   const handleDigit = useCallback(
     (digit: string) => {
       if (!currentItem) return;
-
-      if (phase === "study") {
-        // During study, tapping starts the test
-        return;
-      }
+      if (phase === "study") return;
 
       if (phase === "result") {
-        // Any tap moves to next
         moveToNext();
         return;
       }
 
       // Test phase
-      const expected = getChunkDigits(currentItem.chunkIndex);
+      const expected = getCurrentDigits();
       const pos = input.length;
       const expectedDigit = expected[pos];
 
@@ -146,44 +214,44 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         const newInput = input + digit;
         setInput(newInput);
 
-        if (newInput.length === 5) {
-          // Completed chunk correctly
+        if (newInput.length === expected.length) {
           const elapsed = performance.now() - startTime.current;
           playSuccessTone();
 
-          setAppState((prev) => {
-            const cs = getChunkState(prev, currentItem.chunkIndex);
-            const updated: ChunkState = {
-              ...cs,
-              correctStreak: cs.correctStreak + 1,
-              totalReviews: cs.totalReviews + 1,
-              totalCorrect: cs.totalCorrect + 1,
-            };
-
-            let newState = updateChunkState(prev, updated);
-
-            // If this was a new chunk, increment learnedChunkCount
-            if (currentItem.isNew) {
-              newState = {
-                ...newState,
-                learnedChunkCount: Math.max(
-                  newState.learnedChunkCount,
-                  currentItem.chunkIndex + 1
-                ),
+          // Only update chunk state for regular chunk tests (not boundary)
+          if (!currentItem.isBoundary) {
+            setAppState((prev) => {
+              const cs = getChunkState(prev, currentItem.chunkIndex);
+              const updated: ChunkState = {
+                ...cs,
+                correctStreak: cs.correctStreak + 1,
+                totalReviews: cs.totalReviews + 1,
+                totalCorrect: cs.totalCorrect + 1,
               };
+
+              let newState = updateChunkState(prev, updated);
+
+              if (currentItem.isNew) {
+                newState = {
+                  ...newState,
+                  learnedChunkCount: Math.max(
+                    newState.learnedChunkCount,
+                    currentItem.chunkIndex + 1
+                  ),
+                };
+              }
+
+              saveState(newState);
+              return newState;
+            });
+
+            if (currentItem.isNew) {
+              setChunksLearnedThisSession((c) => c + 1);
             }
-
-            saveState(newState);
-            return newState;
-          });
-
-          if (currentItem.isNew) {
-            setChunksLearnedThisSession((c) => c + 1);
           }
 
-          setResultMessage(
-            `✓ ${elapsed < 3000 ? "Fast!" : "Correct!"} (${Math.round(elapsed)}ms)`
-          );
+          const label = currentItem.isBoundary ? "Boundary nailed!" : (elapsed < 3000 ? "Fast!" : "Correct!");
+          setResultMessage(`✓ ${label} (${Math.round(elapsed)}ms)`);
           setPhase("result");
           advanceQueue(true);
         }
@@ -192,30 +260,31 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         setLastResult("error");
         setLastDigit(digit);
 
-        setAppState((prev) => {
-          const cs = getChunkState(prev, currentItem.chunkIndex);
-          const updated: ChunkState = {
-            ...cs,
-            correctStreak: 0,
-            totalReviews: cs.totalReviews + 1,
-          };
-          const newState = updateChunkState(prev, updated);
-          saveState(newState);
-          return newState;
-        });
+        if (!currentItem.isBoundary) {
+          setAppState((prev) => {
+            const cs = getChunkState(prev, currentItem.chunkIndex);
+            const updated: ChunkState = {
+              ...cs,
+              correctStreak: 0,
+              totalReviews: cs.totalReviews + 1,
+            };
+            const newState = updateChunkState(prev, updated);
+            saveState(newState);
+            return newState;
+          });
+        }
 
         setResultMessage(`✗ Expected: ${expected}`);
         setPhase("result");
-        advanceQueue(false, currentItem.chunkIndex);
+        advanceQueue(false, currentItem);
       }
 
-      // Clear visual feedback
       setTimeout(() => {
         setLastResult(null);
         setLastDigit(null);
       }, 150);
     },
-    [phase, currentItem, input, getChunkDigits, advanceQueue, moveToNext]
+    [phase, currentItem, input, getCurrentDigits, advanceQueue, moveToNext]
   );
 
   // Keyboard support
@@ -249,7 +318,8 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     );
   }
 
-  const chunkDigits = getChunkDigits(currentItem.chunkIndex);
+  const digits = getCurrentDigits();
+  const label = getCurrentLabel();
   const chunkState = getChunkState(appState, currentItem.chunkIndex);
   const masteredCount = appState.chunks.filter((c) => c.correctStreak >= 3).length;
 
@@ -259,8 +329,13 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
       <header className="text-center space-y-1">
         <h1 className="text-2xl font-bold tracking-tight text-gradient-amber">π</h1>
         <p className="text-xs text-muted-foreground tracking-widest uppercase">
-          learn · chunk {currentItem.chunkIndex + 1}
+          learn · {label}
         </p>
+        {currentItem.isBoundary && (
+          <p className="text-[10px] text-amber-400/70 tracking-widest uppercase">
+            ⚡ seam drill
+          </p>
+        )}
       </header>
 
       {/* Main area */}
@@ -272,11 +347,11 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
                 memorize this chunk
               </div>
               <div className="font-mono text-4xl tracking-[0.4em] text-primary font-bold">
-                {chunkDigits}
+                {digits}
               </div>
               <div className="text-xs text-muted-foreground">
-                digits {currentItem.chunkIndex * 5 + 1}–
-                {currentItem.chunkIndex * 5 + 5}
+                digits {currentItem.chunkIndex * CHUNK_SIZE + 1}–
+                {currentItem.chunkIndex * CHUNK_SIZE + CHUNK_SIZE}
               </div>
               <button
                 onClick={startTest}
@@ -291,15 +366,15 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
           {phase === "test" && (
             <div className="fade-in space-y-4">
               <div className="text-xs text-muted-foreground uppercase tracking-widest">
-                type from memory
+                {currentItem.isBoundary ? "type across the seam" : "type from memory"}
               </div>
-              <div className="font-mono text-4xl tracking-[0.4em] h-12 flex items-center justify-center">
+              <div className="font-mono text-4xl tracking-[0.3em] h-12 flex items-center justify-center flex-wrap">
                 {input.split("").map((d, i) => (
                   <span key={i} className="text-primary font-bold">
                     {d}
                   </span>
                 ))}
-                {Array.from({ length: 5 - input.length }).map((_, i) => (
+                {Array.from({ length: digits.length - input.length }).map((_, i) => (
                   <span
                     key={`empty-${i}`}
                     className={`text-muted-foreground/30 ${
@@ -311,8 +386,16 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
                 ))}
               </div>
               <div className="text-xs text-muted-foreground">
-                {input.length}/5 digits
+                {input.length}/{digits.length} digits
               </div>
+              {/* For boundary/merge tests, show grouping hint */}
+              {currentItem.isBoundary && (
+                <div className="text-[10px] text-muted-foreground/50">
+                  {currentItem.boundaryLength === CHUNK_SIZE * 2
+                    ? `two chunks merged (${CHUNK_SIZE}+${CHUNK_SIZE})`
+                    : `${BOUNDARY_OVERLAP} digits from each side of the boundary`}
+                </div>
+              )}
             </div>
           )}
 
@@ -327,8 +410,23 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
               >
                 {resultMessage}
               </div>
+              {/* Show digits with visual boundary marker */}
               <div className="font-mono text-2xl tracking-[0.3em] text-muted-foreground">
-                {chunkDigits}
+                {currentItem.isBoundary && currentItem.boundaryLength === BOUNDARY_LENGTH ? (
+                  <>
+                    <span className="text-muted-foreground">{digits.slice(0, BOUNDARY_OVERLAP)}</span>
+                    <span className="text-amber-400 mx-0.5">│</span>
+                    <span className="text-muted-foreground">{digits.slice(BOUNDARY_OVERLAP)}</span>
+                  </>
+                ) : currentItem.isBoundary && currentItem.boundaryLength === CHUNK_SIZE * 2 ? (
+                  <>
+                    <span className="text-muted-foreground">{digits.slice(0, CHUNK_SIZE)}</span>
+                    <span className="text-amber-400 mx-1"> </span>
+                    <span className="text-muted-foreground">{digits.slice(CHUNK_SIZE)}</span>
+                  </>
+                ) : (
+                  digits
+                )}
               </div>
               <div className="text-xs text-muted-foreground">
                 tap or enter to continue
@@ -345,7 +443,7 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
           <StatCell label="mastered" value={masteredCount.toString()} />
           <StatCell
             label="streak"
-            value={chunkState.correctStreak.toString()}
+            value={currentItem.isBoundary ? "—" : chunkState.correctStreak.toString()}
           />
           <StatCell label="session" value={`+${chunksLearnedThisSession}`} />
         </div>
