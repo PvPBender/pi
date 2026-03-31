@@ -13,6 +13,8 @@ import WeakSpots from "@/components/WeakSpots";
 import ReverseDrill from "@/components/ReverseDrill";
 import Achievements from "@/components/Achievements";
 import ShareCard from "@/components/ShareCard";
+import CompetitionSim from "@/components/CompetitionSim";
+import DailyPlan from "@/components/DailyPlan";
 import { getPiDigit, TOTAL_AVAILABLE_DIGITS, ensureDigitsLoaded, isLoaded } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
 import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
@@ -43,6 +45,7 @@ type AppMode =
   | "reverse"
   | "achievements"
   | "share"
+  | "competition"
   | "loading";
 
 const PI_RECORDS = [
@@ -299,6 +302,7 @@ export default function Index() {
   if (mode === "reverse") return <ReverseDrill onBack={returnToMenu} />;
   if (mode === "achievements") return <Achievements onBack={returnToMenu} />;
   if (mode === "share") return <ShareCard state={state} onClose={returnToMenu} />;
+  if (mode === "competition") return <CompetitionSim onBack={returnToMenu} />;
 
   // Menu
   if (mode === "menu") {
@@ -370,6 +374,12 @@ export default function Index() {
             )}
           </div>
 
+          {/* Daily Plan */}
+          <DailyPlan
+            state={state}
+            onNavigate={(m) => setMode(m as AppMode)}
+          />
+
           {/* TRAIN section */}
           <div className="space-y-2">
             <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
@@ -421,7 +431,7 @@ export default function Index() {
             <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
               Challenge
             </div>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-5 gap-2">
               <button
                 onClick={() => setMode("matrix")}
                 className="px-2 py-3 bg-muted text-foreground rounded-lg font-semibold text-xs tracking-wide hover:opacity-90 transition-opacity border border-border"
@@ -456,6 +466,15 @@ export default function Index() {
                 🔄
                 <span className="block text-[9px] font-normal text-muted-foreground mt-0.5">
                   REVERSE
+                </span>
+              </button>
+              <button
+                onClick={() => setMode("competition")}
+                className="px-2 py-3 bg-muted text-foreground rounded-lg font-semibold text-xs tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                🏟️
+                <span className="block text-[9px] font-normal text-muted-foreground mt-0.5">
+                  COMP
                 </span>
               </button>
             </div>

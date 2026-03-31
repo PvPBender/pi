@@ -1,5 +1,7 @@
 import { useState, useCallback } from "react";
 import { loadState, saveState, type AppState, type AppSettings } from "@/lib/storage";
+import { THEMES, applyTheme, getThemeNames, getThemeLabel } from "@/lib/themes";
+import { setTTSEnabled, setTTSSpeed, isTTSAvailable } from "@/lib/tts";
 
 interface SettingsProps {
   onBack: () => void;
@@ -19,6 +21,17 @@ export default function Settings({ onBack }: SettingsProps) {
       // Keep top-level fields in sync
       if (patch.numpadLayout) next.numpadLayout = patch.numpadLayout;
       if (patch.dailyGoal) next.dailyGoal = patch.dailyGoal;
+      // Apply theme immediately
+      if (patch.theme) {
+        applyTheme(patch.theme);
+      }
+      // Apply TTS settings
+      if (patch.ttsEnabled !== undefined) {
+        setTTSEnabled(patch.ttsEnabled);
+      }
+      if (patch.ttsSpeed !== undefined) {
+        setTTSSpeed(patch.ttsSpeed);
+      }
       saveState(next);
       return next;
     });
@@ -57,6 +70,36 @@ export default function Settings({ onBack }: SettingsProps) {
       </header>
 
       <div className="w-full space-y-5 flex-1">
+        {/* Theme */}
+        <SettingRow label="Theme" description="Visual theme">
+          <div className="grid grid-cols-4 gap-2">
+            {getThemeNames().map((name) => {
+              const t = THEMES[name];
+              const isActive = settings.theme === name;
+              return (
+                <button
+                  key={name}
+                  onClick={() => updateSettings({ theme: name })}
+                  className={`relative rounded-lg border-2 p-1.5 transition-all ${
+                    isActive ? "border-primary" : "border-border hover:border-muted-foreground"
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="w-full h-6 rounded-sm flex gap-[2px] overflow-hidden">
+                      <div className="flex-1" style={{ backgroundColor: t.bg }} />
+                      <div className="flex-1" style={{ backgroundColor: t.surface }} />
+                      <div className="flex-1" style={{ backgroundColor: t.primary }} />
+                    </div>
+                    <span className={`text-[9px] ${isActive ? "text-primary font-semibold" : "text-muted-foreground"}`}>
+                      {getThemeLabel(name)}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </SettingRow>
+
         {/* Chunk Size */}
         <SettingRow label="Chunk Size" description="Digits per chunk in Learn mode">
           <div className="flex gap-2">
@@ -166,6 +209,35 @@ export default function Settings({ onBack }: SettingsProps) {
           />
         </SettingRow>
 
+        {/* TTS */}
+        {isTTSAvailable() && (
+          <>
+            <SettingRow label="Text-to-Speech" description="Read digits aloud">
+              <ToggleButton
+                active={settings.ttsEnabled}
+                onToggle={() => updateSettings({ ttsEnabled: !settings.ttsEnabled })}
+              />
+            </SettingRow>
+
+            {settings.ttsEnabled && (
+              <SettingRow
+                label="TTS Speed"
+                description={`${settings.ttsSpeed.toFixed(1)}x`}
+              >
+                <input
+                  type="range"
+                  min={0.5}
+                  max={2.0}
+                  step={0.1}
+                  value={settings.ttsSpeed}
+                  onChange={(e) => updateSettings({ ttsSpeed: Number(e.target.value) })}
+                  className="w-full accent-primary"
+                />
+              </SettingRow>
+            )}
+          </>
+        )}
+
         {/* Reset Progress */}
         <div className="pt-4 border-t border-border">
           {showResetConfirm ? (
@@ -200,7 +272,7 @@ export default function Settings({ onBack }: SettingsProps) {
 
         {/* Version */}
         <div className="text-center text-[10px] text-muted-foreground/40 pt-2">
-          π Trainer v2.0.0
+          π Trainer v3.0.0
         </div>
       </div>
 

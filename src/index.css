@@ -112,4 +112,35 @@
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
   }
+
+  /* Landscape layout support */
+  .landscape-split {
+    display: flex;
+    flex-direction: column;
+  }
+
+  @media (orientation: landscape) and (min-width: 600px) {
+    .landscape-split {
+      flex-direction: row;
+      align-items: stretch;
+    }
+    .landscape-main {
+      flex: 3;
+      overflow-y: auto;
+    }
+    .landscape-numpad {
+      flex: 2;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding-left: 1rem;
+    }
+    .landscape-menu {
+      max-width: none;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      align-items: start;
+    }
+  }
 }

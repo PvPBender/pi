@@ -1,14 +1,21 @@
 import { useState, useMemo } from "react";
-import { loadState, getChunkState, getChunkArray, type AppState } from "@/lib/storage";
+import { loadState, getChunkState, getChunkArray, type AppState, type ChunkState } from "@/lib/storage";
+import { getPiDigits } from "@/lib/pi";
 import ConfusionMatrix from "@/components/ConfusionMatrix";
+import ForgettingCurve from "@/components/ForgettingCurve";
 import { averageFatigueCurves } from "@/lib/fatigue";
+import { rateChunkDifficulty, getDifficultyBgColor } from "@/lib/difficulty";
 
 interface DashboardProps {
   onBack: () => void;
 }
 
+type HeatmapMode = "mastery" | "difficulty";
+
 export default function Dashboard({ onBack }: DashboardProps) {
   const [state] = useState<AppState>(loadState);
+  const [selectedChunk, setSelectedChunk] = useState<ChunkState | null>(null);
+  const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>("mastery");
 
   const today = new Date().toISOString().slice(0, 10);
   const todayRecord = state.dailyHistory.find((r) => r.date === today);
@@ -38,7 +45,7 @@ export default function Dashboard({ onBack }: DashboardProps) {
     return days;
   }, [state.dailyHistory]);
 
-  // Progress chart — bestDigit over time from daily history
+  // Progress chart
   const progressData = useMemo(() => {
     const sorted = [...state.dailyHistory].sort((a, b) => a.date.localeCompare(b.date));
     return sorted.slice(-30).map((r) => ({
@@ -47,7 +54,7 @@ export default function Dashboard({ onBack }: DashboardProps) {
     }));
   }, [state.dailyHistory]);
 
-  // Speed trend — avg latency from last 30 sessions
+  // Speed trend
   const speedData = useMemo(() => {
     return state.sessions.slice(-30).map((s, i) => ({
       index: i,
@@ -76,43 +83,49 @@ export default function Dashboard({ onBack }: DashboardProps) {
     });
   }, [state.dailyHistory, state.bestDigit]);
 
-  // Chunk heatmap
+  // Chunk heatmap with difficulty support
   const chunkHeatmap = useMemo(() => {
-    const chunks: { index: number; level: number }[] = [];
-    const maxChunks = Math.min(state.learnedChunkCount + 20, 200); // Show up to 200
+    const chunks: { index: number; level: number; difficulty: number }[] = [];
+    const maxChunks = Math.min(state.learnedChunkCount + 20, 200);
+    const chunkSize = state.settings.chunkSize;
 
     for (let i = 0; i < maxChunks; i++) {
       const cs = getChunkState(state, i);
-      let level = 0; // unlearned
+      let level = 0;
       if (i < state.learnedChunkCount) {
-        if (cs.correctStreak >= 5) level = 4; // mastered
-        else if (cs.correctStreak >= 3) level = 3; // familiar
-        else if (cs.totalReviews > 1) level = 2; // reviewed
-        else level = 1; // learning
+        if (cs.correctStreak >= 5) level = 4;
+        else if (cs.correctStreak >= 3) level = 3;
+        else if (cs.totalReviews > 1) level = 2;
+        else level = 1;
       }
-      chunks.push({ index: i, level });
+      const digits = getPiDigits(i * chunkSize, chunkSize);
+      const difficulty = rateChunkDifficulty(digits);
+      chunks.push({ index: i, level, difficulty });
     }
     return chunks;
   }, [state]);
 
+  if (selectedChunk) {
+    return <ForgettingCurve chunk={selectedChunk} onClose={() => setSelectedChunk(null)} />;
+  }
+
   const intensityColors = [
-    "bg-muted/20",       // 0: no activity
-    "bg-green-900/50",   // 1: light
-    "bg-green-700/60",   // 2: moderate
-    "bg-green-500/70",   // 3: active
-    "bg-green-400",      // 4: intense
+    "bg-muted/20",
+    "bg-green-900/50",
+    "bg-green-700/60",
+    "bg-green-500/70",
+    "bg-green-400",
   ];
 
   const chunkColors = [
-    "bg-muted/20",       // 0: unlearned
-    "bg-red-500/60",     // 1: learning
-    "bg-orange-500/60",  // 2: reviewed
-    "bg-yellow-500/60",  // 3: familiar
-    "bg-green-500/70",   // 4: mastered
+    "bg-muted/20",
+    "bg-red-500/60",
+    "bg-orange-500/60",
+    "bg-yellow-500/60",
+    "bg-green-500/70",
   ];
 
   const maxProgress = progressData.length > 0 ? Math.max(...progressData.map((p) => p.digits)) : 1;
-  const maxLatency = speedData.length > 0 ? Math.max(...speedData.map((s) => s.latency)) : 1;
 
   return (
     <div className="min-h-screen flex flex-col items-center py-6 px-4 max-w-md mx-auto">
@@ -201,7 +214,7 @@ export default function Dashboard({ onBack }: DashboardProps) {
                       ? "bg-yellow-500/60"
                       : "bg-red-500/60"
                   }`}
-                  style={{ height: `${Math.max(5, (s.latency / maxLatency) * 100)}%` }}
+                  style={{ height: `${Math.max(5, (s.latency / Math.max(...speedData.map(x => x.latency), 1)) * 100)}%` }}
                   title={`Session ${i + 1}: ${s.latency}ms`}
                 />
               ))}
@@ -224,6 +237,27 @@ export default function Dashboard({ onBack }: DashboardProps) {
         {/* Chunk heatmap */}
         {chunkHeatmap.length > 0 && (
           <Section title="Chunk mastery">
+            <div className="flex justify-between items-center mb-2">
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setHeatmapMode("mastery")}
+                  className={`text-[9px] px-2 py-0.5 rounded ${
+                    heatmapMode === "mastery" ? "bg-primary/20 text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  Mastery
+                </button>
+                <button
+                  onClick={() => setHeatmapMode("difficulty")}
+                  className={`text-[9px] px-2 py-0.5 rounded ${
+                    heatmapMode === "difficulty" ? "bg-primary/20 text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  Difficulty
+                </button>
+              </div>
+              <span className="text-[9px] text-muted-foreground/50">tap chunk for details</span>
+            </div>
             <div
               className="grid gap-[2px]"
               style={{ gridTemplateColumns: "repeat(20, 1fr)" }}
@@ -231,20 +265,42 @@ export default function Dashboard({ onBack }: DashboardProps) {
               {chunkHeatmap.map((c) => (
                 <div
                   key={c.index}
-                  className={`aspect-square rounded-sm ${chunkColors[c.level]}`}
+                  onClick={() => {
+                    if (c.index < state.learnedChunkCount) {
+                      setSelectedChunk(getChunkState(state, c.index));
+                    }
+                  }}
+                  className={`aspect-square rounded-sm cursor-pointer hover:ring-1 hover:ring-primary/50 transition-all ${
+                    heatmapMode === "mastery"
+                      ? chunkColors[c.level]
+                      : getDifficultyBgColor(c.difficulty)
+                  }`}
                   title={`Chunk ${c.index + 1}: ${
-                    ["unlearned", "learning", "reviewed", "familiar", "mastered"][c.level]
+                    heatmapMode === "mastery"
+                      ? ["unlearned", "learning", "reviewed", "familiar", "mastered"][c.level]
+                      : `difficulty ${c.difficulty}/10`
                   }`}
                 />
               ))}
             </div>
             <div className="flex justify-center gap-2 mt-2">
-              {["unlearned", "learning", "reviewed", "familiar", "mastered"].map((label, i) => (
-                <div key={label} className="flex items-center gap-1">
-                  <div className={`w-2.5 h-2.5 rounded-sm ${chunkColors[i]}`} />
-                  <span className="text-[8px] text-muted-foreground">{label}</span>
-                </div>
-              ))}
+              {heatmapMode === "mastery" ? (
+                ["unlearned", "learning", "reviewed", "familiar", "mastered"].map((label, i) => (
+                  <div key={label} className="flex items-center gap-1">
+                    <div className={`w-2.5 h-2.5 rounded-sm ${chunkColors[i]}`} />
+                    <span className="text-[8px] text-muted-foreground">{label}</span>
+                  </div>
+                ))
+              ) : (
+                ["easy", "medium", "hard", "brutal"].map((label, i) => (
+                  <div key={label} className="flex items-center gap-1">
+                    <div className={`w-2.5 h-2.5 rounded-sm ${
+                      ["bg-green-500/60", "bg-yellow-500/60", "bg-orange-500/60", "bg-red-500/60"][i]
+                    }`} />
+                    <span className="text-[8px] text-muted-foreground">{label}</span>
+                  </div>
+                ))
+              )}
             </div>
           </Section>
         )}
@@ -259,7 +315,7 @@ export default function Dashboard({ onBack }: DashboardProps) {
             sessionsWithFatigue.map(s => s.fatigueBuckets!)
           );
           if (avgCurve.length === 0) return null;
-          const maxLatency = Math.max(...avgCurve.map(b => b.avgLatencyMs), 1);
+          const maxLat = Math.max(...avgCurve.map(b => b.avgLatencyMs), 1);
           return (
             <Section title="Fatigue Curve (avg last 5 sessions)">
               <div className="flex items-end gap-[2px] h-20">
@@ -272,7 +328,7 @@ export default function Dashboard({ onBack }: DashboardProps) {
                     />
                     <div
                       className="w-full bg-red-500/40 rounded-t-sm"
-                      style={{ height: `${Math.max(2, (b.avgLatencyMs / maxLatency) * 50)}%` }}
+                      style={{ height: `${Math.max(2, (b.avgLatencyMs / maxLat) * 50)}%` }}
                       title={`${b.minutesMark}min: ${Math.round(b.avgLatencyMs)}ms latency`}
                     />
                   </div>
@@ -295,7 +351,7 @@ export default function Dashboard({ onBack }: DashboardProps) {
           <ConfusionMatrix state={state} />
         </Section>
 
-        {/* Session history (compact) */}
+        {/* Session history */}
         <Section title={`Sessions (${state.sessions.length})`}>
           <div className="max-h-48 overflow-y-auto space-y-1">
             {state.sessions.length === 0 ? (

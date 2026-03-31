@@ -45,6 +45,9 @@ export interface AppSettings {
   soundEnabled: boolean;
   hapticsEnabled: boolean;
   targetSpeed: number;        // target ms per digit for speed drills
+  theme: string;              // theme name: dark, amoled, light, hacker
+  ttsEnabled: boolean;
+  ttsSpeed: number;           // 0.5 - 2.0
 }
 
 export interface AppState {
@@ -92,6 +95,9 @@ const defaultSettings: AppSettings = {
   soundEnabled: true,
   hapticsEnabled: true,
   targetSpeed: 500,
+  theme: "dark",
+  ttsEnabled: false,
+  ttsSpeed: 1.0,
 };
 
 const defaultState: AppState = {
@@ -146,6 +152,9 @@ function migrateSettings(raw: any, numpadLayout?: string): AppSettings {
     if (typeof raw.soundEnabled === "boolean") base.soundEnabled = raw.soundEnabled;
     if (typeof raw.hapticsEnabled === "boolean") base.hapticsEnabled = raw.hapticsEnabled;
     if (typeof raw.targetSpeed === "number") base.targetSpeed = raw.targetSpeed;
+    if (typeof raw.theme === "string") base.theme = raw.theme;
+    if (typeof raw.ttsEnabled === "boolean") base.ttsEnabled = raw.ttsEnabled;
+    if (typeof raw.ttsSpeed === "number") base.ttsSpeed = raw.ttsSpeed;
   } else if (numpadLayout) {
     // Migrate old top-level numpadLayout into settings
     base.numpadLayout = numpadLayout as "phone" | "calculator";

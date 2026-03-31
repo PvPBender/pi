@@ -15,6 +15,8 @@ import {
 } from "@/lib/storage";
 import { addXP } from "@/lib/xp";
 import MnemonicEditor from "@/components/MnemonicEditor";
+import { rateChunkDifficulty, getDifficultyColor, getDifficultyLabel } from "@/lib/difficulty";
+import { speakChunk, isTTSEnabled } from "@/lib/tts";
 
 interface ChunkLearnProps {
   onBack: () => void;
@@ -423,9 +425,29 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
               <div className="font-mono text-5xl tracking-[0.5em] text-primary font-bold">
                 {digits}
               </div>
+              {(() => {
+                const diff = rateChunkDifficulty(digits);
+                return (
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="text-[10px] text-muted-foreground">
+                      digits {currentItem.chunkIndex * chunkSize + 1}–{currentItem.chunkIndex * chunkSize + chunkSize}
+                    </span>
+                    <span className={`text-[10px] font-semibold ${getDifficultyColor(diff)}`}>
+                      ◆ {diff}/10 {getDifficultyLabel(diff)}
+                    </span>
+                  </div>
+                );
+              })()}
+              {isTTSEnabled() && (
+                <button
+                  onClick={() => speakChunk(digits)}
+                  className="text-[10px] text-muted-foreground hover:text-primary transition-colors px-2 py-1 border border-border rounded"
+                >
+                  🔊 Hear it
+                </button>
+              )}
               <div className="text-[10px] text-muted-foreground">
-                digits {currentItem.chunkIndex * chunkSize + 1}–{currentItem.chunkIndex * chunkSize + chunkSize}
-                {" · "}just start typing
+                just start typing
               </div>
               {!currentItem.isBoundary && (
                 <MnemonicEditor
