@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import Numpad from "@/components/Numpad";
 import { getPiDigits } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
+import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
 import {
   loadState,
   saveState,
@@ -28,6 +29,7 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
   const [resultMessage, setResultMessage] = useState("");
   const [reviewedCount, setReviewedCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
+  const [flashSuccess, setFlashSuccess] = useState(false);
   const isCalculatorLayout = appState.numpadLayout === "calculator";
   const toggleNumpadLayout = useCallback(() => {
     setAppState((prev) => {
@@ -37,6 +39,7 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
     });
   }, []);
   const startTime = useRef(0);
+  const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Calculate due chunks on mount
   useEffect(() => {
@@ -45,7 +48,6 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
     const now = Date.now();
     const due: number[] = [];
 
-    // All learned chunks that are due for review
     for (let i = 0; i < state.learnedChunkCount; i++) {
       const cs = getChunkState(state, i);
       if (cs.nextReview <= now || cs.totalReviews === 0) {
@@ -53,7 +55,6 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
       }
     }
 
-    // Sort: most overdue first
     due.sort((a, b) => {
       const csA = getChunkState(state, a);
       const csB = getChunkState(state, b);
@@ -66,6 +67,13 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
     } else {
       startTime.current = performance.now();
     }
+  }, []);
+
+  // Cleanup auto-advance timer
+  useEffect(() => {
+    return () => {
+      if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
+    };
   }, []);
 
   const currentChunkIndex = dueChunks[currentIdx];
@@ -83,6 +91,7 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
       setPhase("test");
       setInput("");
       setResultMessage("");
+      setFlashSuccess(false);
       startTime.current = performance.now();
     }
   }, [currentIdx, dueChunks.length]);
@@ -92,7 +101,10 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
       if (phase === "done") return;
 
       if (phase === "result") {
-        moveToNext();
+        // Only allow manual advance on errors (correct auto-advances)
+        if (resultMessage.startsWith("✗")) {
+          moveToNext();
+        }
         return;
       }
 
@@ -103,6 +115,7 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
 
       if (digit === expectedDigit) {
         playTone(digit);
+        vibrateLight();
         setLastResult("correct");
         setLastDigit(digit);
         const newInput = input + digit;
@@ -111,32 +124,41 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
         if (newInput.length === 5) {
           const elapsed = performance.now() - startTime.current;
           playSuccessTone();
+          vibrateSuccess();
 
-          // Grade based on speed: <3s = 5, <5s = 4, else = 3
           const grade = elapsed < 3000 ? 5 : elapsed < 5000 ? 4 : 3;
 
+          // Compute updated chunk to get fresh interval
+          const cs = getChunkState(loadState(), currentChunkIndex);
+          const updated = sm2Update(cs, grade);
+          const intervalDays = Math.max(1, updated.interval);
+
           setAppState((prev) => {
-            const cs = getChunkState(prev, currentChunkIndex);
-            const updated = sm2Update(cs, grade);
-            const newState = updateChunkState(prev, updated);
+            const csPrev = getChunkState(prev, currentChunkIndex);
+            const updatedPrev = sm2Update(csPrev, grade);
+            const newState = updateChunkState(prev, updatedPrev);
             saveState(newState);
             return newState;
           });
 
           setReviewedCount((c) => c + 1);
           setCorrectCount((c) => c + 1);
-          const intervalDays = getChunkState(appState, currentChunkIndex).interval;
           setResultMessage(
-            `✓ ${elapsed < 3000 ? "Fast!" : "Correct!"} Next review in ~${Math.max(1, intervalDays)}d`
+            `✓ ${elapsed < 3000 ? "Fast!" : "Correct!"} Next review in ~${intervalDays}d`
           );
-          setPhase("result");
+          setFlashSuccess(true);
+
+          // Auto-advance after 300ms green flash
+          autoAdvanceTimer.current = setTimeout(() => {
+            moveToNext();
+          }, 300);
         }
       } else {
         playErrorTone();
+        vibrateError();
         setLastResult("error");
         setLastDigit(digit);
 
-        // Grade 1 — fail
         setAppState((prev) => {
           const cs = getChunkState(prev, currentChunkIndex);
           const updated = sm2Update(cs, 1);
@@ -149,7 +171,6 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
         setResultMessage(`✗ Expected: ${getChunkDigits(currentChunkIndex)}`);
         setPhase("result");
 
-        // Re-add to end of due list for retry
         setDueChunks((prev) => [...prev, currentChunkIndex]);
       }
 
@@ -158,14 +179,22 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
         setLastDigit(null);
       }, 150);
     },
-    [phase, currentChunkIndex, input, getChunkDigits, appState, moveToNext]
+    [phase, currentChunkIndex, input, getChunkDigits, moveToNext, resultMessage]
   );
+
+  // Backspace support
+  const handleBackspace = useCallback(() => {
+    if (phase !== "test" || input.length === 0) return;
+    setInput((prev) => prev.slice(0, -1));
+  }, [phase, input.length]);
 
   // Keyboard support
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (/^[0-9]$/.test(e.key)) {
         handleDigit(e.key);
+      } else if (e.key === "Backspace") {
+        handleBackspace();
       } else if (e.key === "Enter" && phase === "result") {
         moveToNext();
       } else if (e.key === "Escape") {
@@ -174,7 +203,7 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleDigit, phase, moveToNext, onBack]);
+  }, [handleDigit, handleBackspace, phase, moveToNext, onBack]);
 
   // Stats
   const now = Date.now();
@@ -213,7 +242,6 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
             </p>
           )}
 
-          {/* Stats */}
           <div className="grid grid-cols-3 gap-4 text-center mt-4">
             <div>
               <div className="text-lg font-bold text-foreground">{totalLearned}</div>
@@ -246,7 +274,7 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
   const remaining = dueChunks.length - currentIdx;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-between py-6 px-4 max-w-md mx-auto">
+    <div className={`min-h-screen flex flex-col items-center justify-between py-6 px-4 max-w-md mx-auto transition-colors duration-300 ${flashSuccess ? "bg-green-900/20" : ""}`}>
       {/* Header */}
       <header className="text-center space-y-1">
         <h1 className="text-2xl font-bold tracking-tight text-gradient-amber">π</h1>

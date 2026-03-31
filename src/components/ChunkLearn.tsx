@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import Numpad from "@/components/Numpad";
 import { getPiDigits } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
+import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
 import {
   loadState,
   saveState,
@@ -15,9 +16,6 @@ interface ChunkLearnProps {
   onBack: () => void;
 }
 
-// "study" = only for brand-new chunks, shows digits briefly
-// "test" = typing digits (the main state — auto-entered for reviews)
-// "error" = wrong answer, shows correct digits, tap to retry
 type Phase = "study" | "test" | "error";
 
 interface QueueItem {
@@ -56,6 +54,13 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
   const [flashSuccess, setFlashSuccess] = useState(false);
   const startTime = useRef(0);
 
+  // Ref to always have current queue for closures (fixes stale closure bug)
+  const queueRef = useRef<QueueItem[]>([]);
+  queueRef.current = queue;
+
+  const currentItemRef = useRef<QueueItem | null>(null);
+  currentItemRef.current = currentItem;
+
   const getCurrentDigits = useCallback((item: QueueItem | null): string => {
     if (!item) return "";
     if (item.isBoundary && item.boundaryStart !== undefined) {
@@ -76,7 +81,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     return `chunk ${item.chunkIndex + 1}`;
   }, []);
 
-  // Start a queue item — new chunks get study phase, everything else goes straight to test
   const startItem = useCallback((item: QueueItem) => {
     setCurrentItem(item);
     setInput("");
@@ -94,7 +98,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
       const items: QueueItem[] = [];
       const nextIdx = Math.max(state.learnedChunkCount, justLearnedIdx + 1);
 
-      // Boundary drill between just-learned and previous
       if (justLearnedIdx > 0) {
         items.push({
           chunkIndex: justLearnedIdx - 1,
@@ -105,7 +108,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         });
       }
 
-      // Interleaved reviews of recent chunks
       for (let i = Math.max(0, nextIdx - 4); i < nextIdx; i++) {
         const cs = getChunkState(state, i);
         if (cs.correctStreak < 5) {
@@ -113,7 +115,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         }
       }
 
-      // Every 3 chunks: merge drills
       if (justLearnedIdx >= 1 && justLearnedIdx % 3 === 0) {
         for (let i = Math.max(0, justLearnedIdx - 2); i < justLearnedIdx; i++) {
           items.push({
@@ -126,7 +127,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         }
       }
 
-      // Next new chunk
       items.push({ chunkIndex: nextIdx, isNew: true });
 
       return items;
@@ -145,7 +145,9 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
   }, [startItem]);
 
   const advanceToNext = useCallback(
-    (currentQueue: QueueItem[], passed: boolean, failedItem?: QueueItem) => {
+    (passed: boolean, failedItem?: QueueItem) => {
+      // Use ref to get current queue (avoids stale closure)
+      const currentQueue = queueRef.current;
       let newQueue = [...currentQueue.slice(1)];
 
       if (!passed && failedItem) {
@@ -153,7 +155,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         newQueue.splice(insertAt, 0, { ...failedItem, isNew: false });
       }
 
-      // Refill if running low
       if (newQueue.filter((q) => q.isNew).length === 0 && newQueue.length < 3) {
         const state = loadState();
         const followUp = buildFollowUpQueue(state, state.learnedChunkCount - 1);
@@ -171,29 +172,35 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     [buildFollowUpQueue, startItem]
   );
 
+  // Backspace support
+  const handleBackspace = useCallback(() => {
+    if (phase !== "test" || input.length === 0) return;
+    setInput((prev) => prev.slice(0, -1));
+  }, [phase, input.length]);
+
   const handleDigit = useCallback(
     (digit: string) => {
       if (!currentItem) return;
 
-      // In study phase, first digit tap starts the test
       if (phase === "study") {
         setPhase("test");
         startTime.current = performance.now();
-        // Process this digit as the first test input
         const expected = getCurrentDigits(currentItem);
         if (digit === expected[0]) {
           playTone(digit);
+          vibrateLight();
           setLastResult("correct");
           setLastDigit(digit);
           setInput(digit);
-          // If chunk is only 1 digit (shouldn't happen, but safe)
           if (expected.length === 1) {
             playSuccessTone();
+            vibrateSuccess();
             setFlashSuccess(true);
-            setTimeout(() => advanceToNext(queue, true), 300);
+            setTimeout(() => advanceToNext(true), 300);
           }
         } else {
           playErrorTone();
+          vibrateError();
           setLastResult("error");
           setLastDigit(digit);
           setPhase("error");
@@ -211,28 +218,27 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         return;
       }
 
-      // In error phase, any tap moves to next
       if (phase === "error") {
-        advanceToNext(queue, false, currentItem);
+        advanceToNext(false, currentItem);
         return;
       }
 
-      // Test phase — the core loop
+      // Test phase
       const expected = getCurrentDigits(currentItem);
       const pos = input.length;
       const expectedDigit = expected[pos];
 
       if (digit === expectedDigit) {
         playTone(digit);
+        vibrateLight();
         setLastResult("correct");
         setLastDigit(digit);
         const newInput = input + digit;
         setInput(newInput);
 
         if (newInput.length === expected.length) {
-          // Completed! Flash green and auto-advance
-          const elapsed = performance.now() - startTime.current;
           playSuccessTone();
+          vibrateSuccess();
           setFlashSuccess(true);
 
           if (!currentItem.isBoundary) {
@@ -259,12 +265,11 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
             }
           }
 
-          // Auto-advance after brief flash (300ms)
-          setTimeout(() => advanceToNext(queue, true), 300);
+          setTimeout(() => advanceToNext(true), 300);
         }
       } else {
-        // Wrong digit — show error, require tap to continue
         playErrorTone();
+        vibrateError();
         setLastResult("error");
         setLastDigit(digit);
 
@@ -283,7 +288,7 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
       setTimeout(() => { setLastResult(null); setLastDigit(null); }, 150);
     },
-    [phase, currentItem, input, getCurrentDigits, advanceToNext, queue]
+    [phase, currentItem, input, getCurrentDigits, advanceToNext]
   );
 
   // Keyboard support
@@ -291,12 +296,14 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     const handler = (e: KeyboardEvent) => {
       if (/^[0-9]$/.test(e.key)) {
         handleDigit(e.key);
+      } else if (e.key === "Backspace") {
+        handleBackspace();
       } else if (e.key === "Enter" || e.key === " ") {
         if (phase === "study") {
           setPhase("test");
           startTime.current = performance.now();
         } else if (phase === "error") {
-          advanceToNext(queue, false, currentItem ?? undefined);
+          advanceToNext(false, currentItemRef.current ?? undefined);
         }
       } else if (e.key === "Escape") {
         onBack();
@@ -304,7 +311,7 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleDigit, phase, queue, currentItem, advanceToNext, onBack]);
+  }, [handleDigit, handleBackspace, phase, advanceToNext, onBack]);
 
   if (!currentItem) {
     return (
@@ -323,7 +330,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
   const digits = getCurrentDigits(currentItem);
   const label = getCurrentLabel(currentItem);
-  const chunkState = getChunkState(appState, currentItem.chunkIndex);
   const masteredCount = appState.chunks.filter((c) => c.correctStreak >= 3).length;
 
   return (
@@ -356,7 +362,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
           {phase === "test" && (
             <div className="space-y-3">
-              {/* Show digits being typed with slots */}
               <div className="font-mono text-4xl tracking-[0.4em] flex items-center justify-center flex-wrap">
                 {digits.split("").map((_, i) => (
                   <span
@@ -384,7 +389,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
           {phase === "error" && (
             <div className="fade-in space-y-3">
               <div className="text-lg font-semibold text-destructive">✗</div>
-              {/* Show the correct answer with what they got wrong highlighted */}
               <div className="font-mono text-3xl tracking-[0.4em]">
                 {digits.split("").map((d, i) => (
                   <span

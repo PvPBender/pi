@@ -4,11 +4,69 @@ import DigitStream from "@/components/DigitStream";
 import StatsBar from "@/components/StatsBar";
 import ChunkLearn from "@/components/ChunkLearn";
 import SpacedRepetition from "@/components/SpacedRepetition";
+import SessionHistory from "@/components/SessionHistory";
 import { getPiDigit, TOTAL_AVAILABLE_DIGITS, ensureDigitsLoaded, isLoaded } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
+import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
 import { loadState, saveState, type AppState, type SessionRecord } from "@/lib/storage";
 
-type AppMode = "menu" | "practice" | "learn" | "review" | "loading";
+type AppMode = "menu" | "practice" | "learn" | "review" | "history" | "loading";
+
+const PI_RECORDS = [
+  { label: "Guinness World Record", holder: "Rajveer Meena 🇮🇳", digits: 70000, year: 2015 },
+  { label: "Unofficial #1", holder: "Suresh Kumar Sharma 🇮🇳", digits: 70030, year: 2015, note: "Not in Guinness" },
+  { label: "Unofficial claimed", holder: "Akira Haraguchi 🇯🇵", digits: 100000, year: 2006, note: "Not accepted by Guinness" },
+  { label: "European Record", holder: "Jonas von Essen 🇸🇪", digits: 24063, year: 2020 },
+  { label: "North American Record", holder: "Paul Hearding 🇺🇸", digits: 30448, year: 2025 },
+];
+
+function exportData(state: AppState) {
+  const json = JSON.stringify(state, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `pi-trainer-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData(onSuccess: (state: AppState) => void) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json";
+  input.onchange = (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string);
+        // Validate required fields
+        if (
+          typeof data.bestDigit !== "number" ||
+          !Array.isArray(data.sessions) ||
+          !Array.isArray(data.chunks)
+        ) {
+          alert("Invalid backup file: missing required fields.");
+          return;
+        }
+        // Ensure defaults for optional fields
+        if (!data.numpadLayout) data.numpadLayout = "calculator";
+        if (data.learnedChunkCount == null) data.learnedChunkCount = 0;
+        if (!data.dailyGoal) data.dailyGoal = 50;
+        if (!data.todayDate) data.todayDate = new Date().toISOString().slice(0, 10);
+        if (data.todayDigitsLearned == null) data.todayDigitsLearned = 0;
+        saveState(data as AppState);
+        onSuccess(data as AppState);
+      } catch {
+        alert("Failed to parse backup file.");
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
 
 export default function Index() {
   const [state, setState] = useState<AppState>(loadState);
@@ -20,6 +78,7 @@ export default function Index() {
   const [mode, setMode] = useState<AppMode>("loading");
   const [latencies, setLatencies] = useState<number[]>([]);
   const [showUpcoming, setShowUpcoming] = useState(false);
+  const [recordsExpanded, setRecordsExpanded] = useState(false);
   const isCalculatorLayout = state.numpadLayout === "calculator";
   const toggleNumpadLayout = useCallback(() => {
     setState((prev) => {
@@ -37,7 +96,6 @@ export default function Index() {
 
   const WARMUP_DIGITS = 10;
 
-  // Load pi digits on mount
   useEffect(() => {
     ensureDigitsLoaded().then(() => setMode("menu"));
   }, []);
@@ -93,6 +151,7 @@ export default function Index() {
 
       if (digit === expected) {
         playTone(digit);
+        vibrateLight();
         setLastResult("correct");
         setLastDigit(digit);
         setStreak((s) => s + 1);
@@ -101,9 +160,9 @@ export default function Index() {
         highestReached.current = Math.max(highestReached.current, nextIndex);
         setCurrentIndex(nextIndex);
 
-        // Milestone celebration every 50 digits
         if (nextIndex % 50 === 0) {
           playSuccessTone();
+          vibrateSuccess();
         }
 
         if (nextIndex >= TOTAL_AVAILABLE_DIGITS) {
@@ -111,13 +170,13 @@ export default function Index() {
         }
       } else {
         playErrorTone();
+        vibrateError();
         setLastResult("error");
         setLastDigit(digit);
         setStreak(0);
         setErrors((e) => e + 1);
       }
 
-      // Clear visual feedback
       setTimeout(() => {
         setLastResult(null);
         setLastDigit(null);
@@ -153,14 +212,19 @@ export default function Index() {
     );
   }
 
-  // Learn mode — delegate to ChunkLearn
+  // Learn mode
   if (mode === "learn") {
     return <ChunkLearn onBack={() => { setState(loadState()); setMode("menu"); }} />;
   }
 
-  // Review mode — delegate to SpacedRepetition
+  // Review mode
   if (mode === "review") {
     return <SpacedRepetition onBack={() => { setState(loadState()); setMode("menu"); }} />;
+  }
+
+  // Session history
+  if (mode === "history") {
+    return <SessionHistory state={state} onBack={() => setMode("menu")} />;
   }
 
   // Menu
@@ -242,17 +306,79 @@ export default function Index() {
                 {totalDue > 0 ? ` · ${totalDue} due` : " · all caught up"}
               </span>
             </button>
+
+            {/* History */}
+            <button
+              onClick={() => setMode("history")}
+              className="w-full px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+            >
+              📊 HISTORY
+              <span className="block text-[10px] font-normal text-muted-foreground mt-0.5">
+                {state.sessions.length} session{state.sessions.length !== 1 ? "s" : ""} recorded
+              </span>
+            </button>
+          </div>
+
+          {/* Records section */}
+          <div className="w-full">
+            <button
+              onClick={() => setRecordsExpanded(!recordsExpanded)}
+              className="w-full text-left text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors py-2"
+            >
+              🏆 Records {recordsExpanded ? "▾" : "▸"}
+            </button>
+            {recordsExpanded && (
+              <div className="space-y-2 mt-1">
+                {PI_RECORDS.map((rec) => {
+                  const progress = Math.min(1, state.bestDigit / rec.digits);
+                  const pct = (progress * 100).toFixed(1);
+                  return (
+                    <div key={rec.label} className="text-left">
+                      <div className="flex justify-between text-[10px] text-muted-foreground mb-0.5">
+                        <span>
+                          {rec.label} — {rec.holder}
+                          {rec.note ? ` (${rec.note})` : ""}
+                        </span>
+                        <span>{rec.digits.toLocaleString()}</span>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all duration-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="text-[9px] text-muted-foreground/50 mt-0.5">
+                        {state.bestDigit.toLocaleString()} / {rec.digits.toLocaleString()} ({pct}%)
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Quick stats */}
           {state.sessions.length > 0 && (
             <div className="text-[10px] text-muted-foreground/50 space-y-0.5">
-              <div>
-                {state.sessions.length} session{state.sessions.length !== 1 ? "s" : ""} recorded
-              </div>
               <div>enter · continue practice &nbsp;&nbsp; esc · stop</div>
             </div>
           )}
+
+          {/* Export / Import */}
+          <div className="flex justify-center gap-4 text-[10px] text-muted-foreground/40">
+            <button
+              onClick={() => exportData(state)}
+              className="hover:text-muted-foreground transition-colors underline"
+            >
+              Export data
+            </button>
+            <button
+              onClick={() => importData((imported) => setState(imported))}
+              className="hover:text-muted-foreground transition-colors underline"
+            >
+              Import data
+            </button>
+          </div>
         </div>
       </div>
     );

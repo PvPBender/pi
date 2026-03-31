@@ -22,12 +22,34 @@ const PENTATONIC_FREQUENCIES: Record<string, number> = {
 };
 
 let audioContext: AudioContext | null = null;
+let audioResumed = false;
 
 function getAudioContext(): AudioContext {
   if (!audioContext) {
     audioContext = new AudioContext();
   }
   return audioContext;
+}
+
+/** Call on the first user gesture (tap/click) to unlock AudioContext on iOS */
+export function resumeAudio(): void {
+  if (audioResumed) return;
+  audioResumed = true;
+  const ctx = getAudioContext();
+  if (ctx.state === "suspended") {
+    ctx.resume();
+  }
+}
+
+// Auto-attach to first user interaction
+if (typeof window !== "undefined") {
+  const unlock = () => {
+    resumeAudio();
+    window.removeEventListener("touchstart", unlock, true);
+    window.removeEventListener("click", unlock, true);
+  };
+  window.addEventListener("touchstart", unlock, true);
+  window.addEventListener("click", unlock, true);
 }
 
 export function playTone(digit: string, duration = 0.08): void {
