@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Android build artifacts
+android/
+*.apk
+
+# Keep pi digits source in public/
+!public/pi-digits.txt
