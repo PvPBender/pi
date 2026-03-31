@@ -15,6 +15,7 @@ import Achievements from "@/components/Achievements";
 import ShareCard from "@/components/ShareCard";
 import CompetitionSim from "@/components/CompetitionSim";
 import DailyPlan from "@/components/DailyPlan";
+import DigitBrowser from "@/components/DigitBrowser";
 import { getPiDigit, TOTAL_AVAILABLE_DIGITS, ensureDigitsLoaded, isLoaded } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
 import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
@@ -46,6 +47,7 @@ type AppMode =
   | "achievements"
   | "share"
   | "competition"
+  | "digitmap"
   | "loading";
 
 const PI_RECORDS = [
@@ -303,6 +305,7 @@ export default function Index() {
   if (mode === "achievements") return <Achievements onBack={returnToMenu} />;
   if (mode === "share") return <ShareCard state={state} onClose={returnToMenu} />;
   if (mode === "competition") return <CompetitionSim onBack={returnToMenu} />;
+  if (mode === "digitmap") return <DigitBrowser onBack={returnToMenu} />;
 
   // Menu
   if (mode === "menu") {
@@ -497,6 +500,12 @@ export default function Index() {
                 className="px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
               >
                 🎯 WEAK SPOTS
+              </button>
+              <button
+                onClick={() => setMode("digitmap")}
+                className="px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                🗺️ DIGIT MAP
               </button>
               <button
                 onClick={() => setMode("achievements")}
