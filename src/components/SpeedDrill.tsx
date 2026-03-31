@@ -3,7 +3,9 @@ import Numpad from "@/components/Numpad";
 import { getPiDigits } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
 import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
-import { loadState, type AppState } from "@/lib/storage";
+import { loadState, saveState, recordConfusion, type AppState } from "@/lib/storage";
+import { addXP } from "@/lib/xp";
+import { applyAchievementCheck } from "@/lib/achievements";
 
 interface SpeedDrillProps {
   onBack: () => void;
@@ -18,7 +20,7 @@ interface DrillResult {
 const DRILL_COUNT = 20;
 
 export default function SpeedDrill({ onBack }: SpeedDrillProps) {
-  const [appState] = useState<AppState>(loadState);
+  const [appState, setAppState] = useState<AppState>(loadState);
   const [drillChunks, setDrillChunks] = useState<number[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [input, setInput] = useState("");
@@ -73,8 +75,22 @@ export default function SpeedDrill({ onBack }: SpeedDrillProps) {
       setDone(true);
       if (timerRef.current) clearInterval(timerRef.current);
       setResults(finalResults);
+
+      // Award XP: 10 per correct chunk
+      const correctCount = finalResults.filter(r => r.correct).length;
+      if (correctCount > 0) {
+        setAppState(prev => {
+          let next = { ...prev };
+          const [withXP] = addXP(next, correctCount * 10, settings.soundEnabled, settings.hapticsEnabled);
+          next = withXP;
+          const [withAch] = applyAchievementCheck(next);
+          next = withAch;
+          saveState(next);
+          return next;
+        });
+      }
     },
-    []
+    [settings]
   );
 
   const handleDigit = useCallback(
@@ -115,6 +131,13 @@ export default function SpeedDrill({ onBack }: SpeedDrillProps) {
         if (settings.hapticsEnabled) vibrateError();
         setLastResult("error");
         setLastDigit(digit);
+
+        // Record confusion
+        setAppState(prev => {
+          const next = recordConfusion(prev, expected, digit);
+          saveState(next);
+          return next;
+        });
 
         const timeMs = performance.now() - startTime.current;
         const result: DrillResult = { chunkIndex: currentChunk, timeMs, correct: false };

@@ -39,6 +39,10 @@ export default function Settings({ onBack }: SettingsProps) {
       currentDayStreak: 0,
       lastPracticeDate: "",
       weakChunks: [],
+      confusionData: {},
+      achievements: [],
+      xp: 0,
+      level: 1,
     };
     saveState(fresh);
     setAppState(fresh);

@@ -3,7 +3,9 @@ import Numpad from "@/components/Numpad";
 import { getPiDigits } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
 import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
-import { loadState, type AppState } from "@/lib/storage";
+import { loadState, saveState, recordConfusion, type AppState } from "@/lib/storage";
+import { addXP } from "@/lib/xp";
+import { applyAchievementCheck, unlockAchievement } from "@/lib/achievements";
 
 interface MatrixChallengeProps {
   onBack: () => void;
@@ -21,7 +23,7 @@ type Phase = "before" | "after" | "result";
 const TOTAL_CHALLENGES = 50;
 
 export default function MatrixChallenge({ onBack }: MatrixChallengeProps) {
-  const [appState] = useState<AppState>(loadState);
+  const [appState, setAppState] = useState<AppState>(loadState);
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("before");
@@ -94,6 +96,20 @@ export default function MatrixChallenge({ onBack }: MatrixChallengeProps) {
           if (currentIdx + 1 >= challenges.length) {
             playSuccessTone();
             vibrateSuccess();
+            // Award XP and check for perfect
+            setAppState(prev => {
+              let next = { ...prev };
+              const [withXP] = addXP(next, (score + 1) * 20, settings.soundEnabled, settings.hapticsEnabled);
+              next = withXP;
+              // Check for perfect matrix
+              if (score + 1 === challenges.length) {
+                next = unlockAchievement(next, "matrix_perfect");
+              }
+              const [withAch] = applyAchievementCheck(next);
+              next = withAch;
+              saveState(next);
+              return next;
+            });
             setDone(true);
           } else {
             setCurrentIdx((i) => i + 1);
@@ -150,6 +166,12 @@ export default function MatrixChallenge({ onBack }: MatrixChallengeProps) {
         if (settings.hapticsEnabled) vibrateError();
         setLastResult("error");
         setLastDigit(digit);
+        // Record confusion
+        setAppState(prev => {
+          const next = recordConfusion(prev, expected[pos], digit);
+          saveState(next);
+          return next;
+        });
         advancePhaseOrChallenge(false);
       }
 

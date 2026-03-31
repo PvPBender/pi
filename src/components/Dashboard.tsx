@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
 import { loadState, getChunkState, getChunkArray, type AppState } from "@/lib/storage";
+import ConfusionMatrix from "@/components/ConfusionMatrix";
+import { averageFatigueCurves } from "@/lib/fatigue";
 
 interface DashboardProps {
   onBack: () => void;
@@ -246,6 +248,52 @@ export default function Dashboard({ onBack }: DashboardProps) {
             </div>
           </Section>
         )}
+
+        {/* Fatigue Curve */}
+        {(() => {
+          const sessionsWithFatigue = state.sessions
+            .filter(s => s.fatigueBuckets && s.fatigueBuckets.length > 0)
+            .slice(-5);
+          if (sessionsWithFatigue.length === 0) return null;
+          const avgCurve = averageFatigueCurves(
+            sessionsWithFatigue.map(s => s.fatigueBuckets!)
+          );
+          if (avgCurve.length === 0) return null;
+          const maxLatency = Math.max(...avgCurve.map(b => b.avgLatencyMs), 1);
+          return (
+            <Section title="Fatigue Curve (avg last 5 sessions)">
+              <div className="flex items-end gap-[2px] h-20">
+                {avgCurve.map((b, i) => (
+                  <div key={i} className="flex-1 flex flex-col items-center gap-[1px]">
+                    <div
+                      className="w-full bg-primary/60 rounded-t-sm"
+                      style={{ height: `${Math.max(5, (b.digitsCorrect / 100) * 80)}%` }}
+                      title={`${b.minutesMark}min: ${b.digitsCorrect}% accuracy`}
+                    />
+                    <div
+                      className="w-full bg-red-500/40 rounded-t-sm"
+                      style={{ height: `${Math.max(2, (b.avgLatencyMs / maxLatency) * 50)}%` }}
+                      title={`${b.minutesMark}min: ${Math.round(b.avgLatencyMs)}ms latency`}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-between text-[9px] text-muted-foreground mt-1">
+                <span>{avgCurve[0]?.minutesMark}min</span>
+                <span>{avgCurve[avgCurve.length - 1]?.minutesMark}min</span>
+              </div>
+              <div className="flex justify-center gap-3 text-[9px] text-muted-foreground mt-1">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-primary/60 rounded-sm inline-block" /> accuracy</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-red-500/40 rounded-sm inline-block" /> latency</span>
+              </div>
+            </Section>
+          );
+        })()}
+
+        {/* Confusion Matrix */}
+        <Section title="Confusion Matrix">
+          <ConfusionMatrix state={state} />
+        </Section>
 
         {/* Session history (compact) */}
         <Section title={`Sessions (${state.sessions.length})`}>

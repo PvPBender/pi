@@ -9,9 +9,12 @@ import {
   getChunkState,
   updateChunkState,
   getChunkArray,
+  recordConfusion,
   type AppState,
   type ChunkState,
 } from "@/lib/storage";
+import { addXP } from "@/lib/xp";
+import MnemonicEditor from "@/components/MnemonicEditor";
 
 interface ChunkLearnProps {
   onBack: () => void;
@@ -225,15 +228,18 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
           setLastResult("error");
           setLastDigit(digit);
           setPhase("error");
-          if (!currentItem.isBoundary) {
-            setAppState((prev) => {
-              const cs = getChunkState(prev, currentItem.chunkIndex);
+          // Record confusion
+          const expectedFirst = expected[0];
+          setAppState((prev) => {
+            let next = recordConfusion(prev, expectedFirst, digit);
+            if (!currentItem.isBoundary) {
+              const cs = getChunkState(next, currentItem.chunkIndex);
               const updated = { ...cs, correctStreak: 0, totalReviews: cs.totalReviews + 1 };
-              const newState = updateChunkState(prev, updated);
-              saveState(newState);
-              return newState;
-            });
-          }
+              next = updateChunkState(next, updated);
+            }
+            saveState(next);
+            return next;
+          });
         }
         setTimeout(() => { setLastResult(null); setLastDigit(null); }, 150);
         return;
@@ -285,6 +291,12 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
             });
             if (currentItem.isNew) {
               setChunksLearnedThisSession((c) => c + 1);
+              // Award XP for learning a new chunk
+              setAppState((prev) => {
+                const [withXP] = addXP(prev, 5, settings.soundEnabled, settings.hapticsEnabled);
+                saveState(withXP);
+                return withXP;
+              });
             }
           }
 
@@ -296,15 +308,17 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         setLastResult("error");
         setLastDigit(digit);
 
-        if (!currentItem.isBoundary) {
-          setAppState((prev) => {
-            const cs = getChunkState(prev, currentItem.chunkIndex);
+        // Record confusion
+        setAppState((prev) => {
+          let next = recordConfusion(prev, expectedDigit, digit);
+          if (!currentItem.isBoundary) {
+            const cs = getChunkState(next, currentItem.chunkIndex);
             const updated = { ...cs, correctStreak: 0, totalReviews: cs.totalReviews + 1 };
-            const newState = updateChunkState(prev, updated);
-            saveState(newState);
-            return newState;
-          });
-        }
+            next = updateChunkState(next, updated);
+          }
+          saveState(next);
+          return next;
+        });
 
         setPhase("error");
       }
@@ -413,6 +427,21 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
                 digits {currentItem.chunkIndex * chunkSize + 1}–{currentItem.chunkIndex * chunkSize + chunkSize}
                 {" · "}just start typing
               </div>
+              {!currentItem.isBoundary && (
+                <MnemonicEditor
+                  digits={digits}
+                  currentMnemonic={getChunkState(appState, currentItem.chunkIndex).mnemonic}
+                  onSelect={(mnemonic) => {
+                    setAppState((prev) => {
+                      const cs = getChunkState(prev, currentItem.chunkIndex);
+                      const updated = { ...cs, mnemonic };
+                      const next = updateChunkState(prev, updated);
+                      saveState(next);
+                      return next;
+                    });
+                  }}
+                />
+              )}
             </div>
           )}
 
@@ -438,6 +467,14 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
                 <div className="text-[10px] text-amber-400/60 uppercase tracking-widest">
                   ⚡ seam
                 </div>
+              )}
+              {!currentItem.isBoundary && (
+                <MnemonicEditor
+                  digits={digits}
+                  currentMnemonic={getChunkState(appState, currentItem.chunkIndex).mnemonic}
+                  onSelect={() => {}}
+                  readOnly
+                />
               )}
             </div>
           )}

@@ -4,7 +4,10 @@ import DigitStream from "@/components/DigitStream";
 import { getPiDigit, TOTAL_AVAILABLE_DIGITS } from "@/lib/pi";
 import { playTone, playErrorTone } from "@/lib/audio";
 import { vibrateLight, vibrateError } from "@/lib/haptics";
-import { loadState, saveState, updateStreak, updateDailyRecord, type AppState, type SessionRecord } from "@/lib/storage";
+import { loadState, saveState, updateStreak, updateDailyRecord, recordConfusion, type AppState, type SessionRecord } from "@/lib/storage";
+import { addXP } from "@/lib/xp";
+import { applyAchievementCheck } from "@/lib/achievements";
+import { FatigueTracker } from "@/lib/fatigue";
 
 interface MarathonProps {
   onBack: () => void;
@@ -26,6 +29,8 @@ export default function Marathon({ onBack }: MarathonProps) {
   const startTime = useRef(performance.now());
   const lastBreakTime = useRef(performance.now());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fatigueTracker = useRef(new FatigueTracker());
+  const lastDigitTime = useRef(performance.now());
   const settings = appState.settings;
   const isCalculatorLayout = settings.numpadLayout === "calculator";
 
@@ -65,6 +70,7 @@ export default function Marathon({ onBack }: MarathonProps) {
       avgLatencyMs: totalDigits > 0 ? elapsed / totalDigits : 0,
       errors,
       durationMs: elapsed,
+      fatigueBuckets: fatigueTracker.current.export(),
     };
 
     setAppState((prev) => {
@@ -79,6 +85,14 @@ export default function Marathon({ onBack }: MarathonProps) {
         errorsTotal: errors,
         bestDigitReached: currentIndex,
       });
+      // XP: 1 per correct digit
+      const correctDigits = totalDigits - errors;
+      if (correctDigits > 0) {
+        const [withXP] = addXP(next, correctDigits, settings.soundEnabled, settings.hapticsEnabled);
+        next = withXP;
+      }
+      const [withAch] = applyAchievementCheck(next);
+      next = withAch;
       saveState(next);
       return next;
     });
@@ -92,6 +106,10 @@ export default function Marathon({ onBack }: MarathonProps) {
 
       const expected = getPiDigit(currentIndex);
 
+      const now = performance.now();
+      const latency = now - lastDigitTime.current;
+      lastDigitTime.current = now;
+
       if (digit === expected) {
         if (settings.soundEnabled) playTone(digit);
         if (settings.hapticsEnabled) vibrateLight();
@@ -99,6 +117,7 @@ export default function Marathon({ onBack }: MarathonProps) {
         setLastDigit(digit);
         setCurrentIndex((i) => i + 1);
         setTotalDigits((t) => t + 1);
+        fatigueTracker.current.record(true, latency);
       } else {
         // Marathon mode: flash red but keep going
         if (settings.soundEnabled) playErrorTone();
@@ -108,7 +127,13 @@ export default function Marathon({ onBack }: MarathonProps) {
         setErrors((e) => e + 1);
         setFlashError(true);
         setTimeout(() => setFlashError(false), 300);
-        // DON'T block — user continues from same position
+        fatigueTracker.current.record(false, latency);
+        // Record confusion
+        setAppState(prev => {
+          const next = recordConfusion(prev, expected, digit);
+          saveState(next);
+          return next;
+        });
       }
 
       setTimeout(() => {

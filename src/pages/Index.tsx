@@ -10,6 +10,9 @@ import MatrixChallenge from "@/components/MatrixChallenge";
 import SpeedDrill from "@/components/SpeedDrill";
 import Marathon from "@/components/Marathon";
 import WeakSpots from "@/components/WeakSpots";
+import ReverseDrill from "@/components/ReverseDrill";
+import Achievements from "@/components/Achievements";
+import ShareCard from "@/components/ShareCard";
 import { getPiDigit, TOTAL_AVAILABLE_DIGITS, ensureDigitsLoaded, isLoaded } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
 import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
@@ -19,9 +22,12 @@ import {
   updateStreak,
   updateDailyRecord,
   getChunkArray,
+  recordConfusion,
   type AppState,
   type SessionRecord,
 } from "@/lib/storage";
+import { addXP, getLevelForXP, getXPProgress } from "@/lib/xp";
+import { applyAchievementCheck, ACHIEVEMENTS } from "@/lib/achievements";
 
 type AppMode =
   | "menu"
@@ -34,6 +40,9 @@ type AppMode =
   | "speed"
   | "marathon"
   | "weakspots"
+  | "reverse"
+  | "achievements"
+  | "share"
   | "loading";
 
 const PI_RECORDS = [
@@ -168,11 +177,19 @@ export default function Index() {
         bestDigitReached: highestReached.current,
         avgLatencyMs: avgLatency || 0,
       });
+      // Award XP: 1 per digit typed correctly
+      const correctDigits = highestReached.current - (errors || 0);
+      if (correctDigits > 0) {
+        const [withXP] = addXP(next, correctDigits, settings.soundEnabled, settings.hapticsEnabled);
+        next = withXP;
+      }
+      const [withAch] = applyAchievementCheck(next);
+      next = withAch;
       saveState(next);
       return next;
     });
     setMode("menu");
-  }, [avgLatency, errors]);
+  }, [avgLatency, errors, settings]);
 
   const handleDigit = useCallback(
     (digit: string) => {
@@ -211,6 +228,12 @@ export default function Index() {
         setLastDigit(digit);
         setStreak(0);
         setErrors((e) => e + 1);
+        // Record confusion
+        setState((prev) => {
+          const next = recordConfusion(prev, expected, digit);
+          saveState(next);
+          return next;
+        });
       }
 
       setTimeout(() => {
@@ -244,7 +267,11 @@ export default function Index() {
   }, []);
 
   const returnToMenu = useCallback(() => {
-    setState(loadState());
+    let s = loadState();
+    const [withAch] = applyAchievementCheck(s);
+    s = withAch;
+    saveState(s);
+    setState(s);
     setMode("menu");
   }, []);
 
@@ -269,6 +296,9 @@ export default function Index() {
   if (mode === "speed") return <SpeedDrill onBack={returnToMenu} />;
   if (mode === "marathon") return <Marathon onBack={returnToMenu} />;
   if (mode === "weakspots") return <WeakSpots onBack={returnToMenu} />;
+  if (mode === "reverse") return <ReverseDrill onBack={returnToMenu} />;
+  if (mode === "achievements") return <Achievements onBack={returnToMenu} />;
+  if (mode === "share") return <ShareCard state={state} onClose={returnToMenu} />;
 
   // Menu
   if (mode === "menu") {
@@ -297,12 +327,32 @@ export default function Index() {
           </button>
         </div>
 
-        <header className="text-center space-y-1 mb-6">
+        <header className="text-center space-y-1 mb-4">
           <h1 className="text-4xl font-bold tracking-tight text-gradient-amber">π</h1>
           <p className="text-xs text-muted-foreground tracking-widest uppercase">
             pi memorization trainer
           </p>
         </header>
+
+        {/* Level & XP bar */}
+        {(() => {
+          const levelInfo = getLevelForXP(state.xp);
+          const xpProg = getXPProgress(state.xp);
+          return (
+            <div className="w-full max-w-xs mb-4 text-center space-y-1">
+              <div className="text-xs text-muted-foreground">
+                Lv.{levelInfo.level} <span className="text-primary font-semibold">{levelInfo.name}</span>
+                <span className="text-muted-foreground/50 ml-1">· {state.xp.toLocaleString()} XP</span>
+              </div>
+              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-500"
+                  style={{ width: `${xpProg.progress * 100}%` }}
+                />
+              </div>
+            </div>
+          );
+        })()}
 
         <div className="text-center space-y-6 w-full max-w-xs">
           {/* Best digit display */}
@@ -371,7 +421,7 @@ export default function Index() {
             <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
               Challenge
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <button
                 onClick={() => setMode("matrix")}
                 className="px-2 py-3 bg-muted text-foreground rounded-lg font-semibold text-xs tracking-wide hover:opacity-90 transition-opacity border border-border"
@@ -399,6 +449,15 @@ export default function Index() {
                   MARATHON
                 </span>
               </button>
+              <button
+                onClick={() => setMode("reverse")}
+                className="px-2 py-3 bg-muted text-foreground rounded-lg font-semibold text-xs tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                🔄
+                <span className="block text-[9px] font-normal text-muted-foreground mt-0.5">
+                  REVERSE
+                </span>
+              </button>
             </div>
           </div>
 
@@ -407,18 +466,33 @@ export default function Index() {
             <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
               Insights
             </div>
-            <div className="flex gap-3">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setMode("dashboard")}
-                className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+                className="px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
               >
                 📊 DASHBOARD
               </button>
               <button
                 onClick={() => setMode("weakspots")}
-                className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+                className="px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
               >
                 🎯 WEAK SPOTS
+              </button>
+              <button
+                onClick={() => setMode("achievements")}
+                className="px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                🏅 ACHIEVEMENTS
+                {state.achievements.length > 0 && (
+                  <span className="ml-1 text-[10px] text-primary">{state.achievements.length}</span>
+                )}
+              </button>
+              <button
+                onClick={() => setMode("share")}
+                className="px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                📤 SHARE
               </button>
             </div>
           </div>

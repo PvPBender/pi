@@ -10,8 +10,10 @@ import {
   updateChunkState,
   sm2Update,
   getChunkArray,
+  recordConfusion,
   type AppState,
 } from "@/lib/storage";
+import { addXP } from "@/lib/xp";
 
 interface SpacedRepetitionProps {
   onBack: () => void;
@@ -168,6 +170,13 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
           );
           setFlashSuccess(true);
 
+          // Award XP for review
+          setAppState((prev) => {
+            const [withXP] = addXP(prev, 3, settings.soundEnabled, settings.hapticsEnabled);
+            saveState(withXP);
+            return withXP;
+          });
+
           autoAdvanceTimer.current = setTimeout(() => {
             moveToNext();
           }, 300);
@@ -179,11 +188,12 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
         setLastDigit(digit);
 
         setAppState((prev) => {
-          const cs = getChunkState(prev, currentChunkIndex);
+          let next = recordConfusion(prev, expectedDigit, digit);
+          const cs = getChunkState(next, currentChunkIndex);
           const updated = sm2Update(cs, 1);
-          const newState = updateChunkState(prev, updated);
-          saveState(newState);
-          return newState;
+          next = updateChunkState(next, updated);
+          saveState(next);
+          return next;
         });
 
         setReviewedCount((c) => c + 1);

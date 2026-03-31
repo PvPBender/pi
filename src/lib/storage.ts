@@ -1,9 +1,17 @@
+export interface FatigueBucket {
+  minutesMark: number;
+  digitsAttempted: number;
+  digitsCorrect: number;
+  avgLatencyMs: number;
+}
+
 export interface SessionRecord {
   date: string;
   digitsReached: number;
   avgLatencyMs: number;
   errors: number;
   durationMs: number;
+  fatigueBuckets?: FatigueBucket[];
 }
 
 export interface ChunkState {
@@ -15,6 +23,7 @@ export interface ChunkState {
   totalReviews: number;
   totalCorrect: number;
   lastLatencyMs?: number;  // last response time for this chunk
+  mnemonic?: string;       // user-selected mnemonic for this chunk
 }
 
 export interface DailyRecord {
@@ -60,6 +69,16 @@ export interface AppState {
 
   // Weak chunks cache
   weakChunks: number[];
+
+  // Confusion matrix: expected_digit -> { typed_digit: count }
+  confusionData: Record<string, Record<string, number>>;
+
+  // Achievements
+  achievements: string[];
+
+  // XP & Level
+  xp: number;
+  level: number;
 }
 
 const STORAGE_KEY = "pi-trainer-state";
@@ -89,6 +108,10 @@ const defaultState: AppState = {
   currentDayStreak: 0,
   lastPracticeDate: "",
   weakChunks: [],
+  confusionData: {},
+  achievements: [],
+  xp: 0,
+  level: 1,
 };
 
 function getToday(): string {
@@ -173,6 +196,10 @@ export function loadState(): AppState {
       currentDayStreak,
       lastPracticeDate,
       weakChunks: Array.isArray(data.weakChunks) ? data.weakChunks : [],
+      confusionData: (data.confusionData && typeof data.confusionData === "object") ? data.confusionData : {},
+      achievements: Array.isArray(data.achievements) ? data.achievements : [],
+      xp: typeof data.xp === "number" ? data.xp : 0,
+      level: typeof data.level === "number" ? data.level : 1,
     };
 
     return state;
@@ -343,6 +370,17 @@ export function sm2Update(chunk: ChunkState, grade: number): ChunkState {
     totalReviews: chunk.totalReviews + 1,
     totalCorrect: grade >= 3 ? chunk.totalCorrect + 1 : chunk.totalCorrect,
   };
+}
+
+// Record a digit confusion (wrong digit typed)
+export function recordConfusion(state: AppState, expected: string, typed: string): AppState {
+  if (expected === typed) return state;
+  const data = { ...state.confusionData };
+  if (!data[expected]) data[expected] = {};
+  const inner = { ...data[expected] };
+  inner[typed] = (inner[typed] || 0) + 1;
+  data[expected] = inner;
+  return { ...state, confusionData: data };
 }
 
 // Calculate weak chunks

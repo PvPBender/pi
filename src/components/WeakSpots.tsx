@@ -10,8 +10,10 @@ import {
   updateChunkState,
   sm2Update,
   calculateWeakChunks,
+  recordConfusion,
   type AppState,
 } from "@/lib/storage";
+import { addXP } from "@/lib/xp";
 
 interface WeakSpotsProps {
   onBack: () => void;
@@ -124,11 +126,12 @@ export default function WeakSpots({ onBack }: WeakSpotsProps) {
         setLastDigit(digit);
 
         setAppState((prev) => {
-          const cs = getChunkState(prev, currentChunkIndex);
+          let next = recordConfusion(prev, expected, digit);
+          const cs = getChunkState(next, currentChunkIndex);
           const updated = sm2Update(cs, 1);
-          const newState = updateChunkState(prev, updated);
-          saveState(newState);
-          return newState;
+          next = updateChunkState(next, updated);
+          saveState(next);
+          return next;
         });
 
         setReviewedCount((c) => c + 1);
