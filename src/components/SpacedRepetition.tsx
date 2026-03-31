@@ -9,6 +9,7 @@ import {
   getChunkState,
   updateChunkState,
   sm2Update,
+  getChunkArray,
   type AppState,
 } from "@/lib/storage";
 
@@ -16,10 +17,11 @@ interface SpacedRepetitionProps {
   onBack: () => void;
 }
 
-type Phase = "test" | "result" | "done";
+type Phase = "test" | "result" | "done" | "batch-done";
 
 export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
   const [appState, setAppState] = useState<AppState>(loadState);
+  const [allDueChunks, setAllDueChunks] = useState<number[]>([]);
   const [dueChunks, setDueChunks] = useState<number[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("test");
@@ -30,14 +32,9 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
   const [reviewedCount, setReviewedCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
   const [flashSuccess, setFlashSuccess] = useState(false);
-  const isCalculatorLayout = appState.numpadLayout === "calculator";
-  const toggleNumpadLayout = useCallback(() => {
-    setAppState((prev) => {
-      const next = { ...prev, numpadLayout: prev.numpadLayout === "calculator" ? "phone" as const : "calculator" as const };
-      saveState(next);
-      return next;
-    });
-  }, []);
+  const [batchNumber, setBatchNumber] = useState(1);
+  const settings = appState.settings;
+  const isCalculatorLayout = settings.numpadLayout === "calculator";
   const startTime = useRef(0);
   const autoAdvanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -61,8 +58,12 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
       return csA.nextReview - csB.nextReview;
     });
 
-    setDueChunks(due);
-    if (due.length === 0) {
+    setAllDueChunks(due);
+    const batchSize = state.settings.reviewBatchSize;
+    const batch = due.slice(0, batchSize);
+    setDueChunks(batch);
+
+    if (batch.length === 0) {
       setPhase("done");
     } else {
       startTime.current = performance.now();
@@ -85,7 +86,13 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
   const moveToNext = useCallback(() => {
     const nextIdx = currentIdx + 1;
     if (nextIdx >= dueChunks.length) {
-      setPhase("done");
+      // Check if more batches remain
+      const usedCount = batchNumber * settings.reviewBatchSize;
+      if (usedCount < allDueChunks.length) {
+        setPhase("batch-done");
+      } else {
+        setPhase("done");
+      }
     } else {
       setCurrentIdx(nextIdx);
       setPhase("test");
@@ -94,14 +101,26 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
       setFlashSuccess(false);
       startTime.current = performance.now();
     }
-  }, [currentIdx, dueChunks.length]);
+  }, [currentIdx, dueChunks.length, batchNumber, settings.reviewBatchSize, allDueChunks.length]);
+
+  const loadNextBatch = useCallback(() => {
+    const nextBatchStart = batchNumber * settings.reviewBatchSize;
+    const nextBatch = allDueChunks.slice(nextBatchStart, nextBatchStart + settings.reviewBatchSize);
+    setDueChunks(nextBatch);
+    setCurrentIdx(0);
+    setBatchNumber((b) => b + 1);
+    setPhase("test");
+    setInput("");
+    setResultMessage("");
+    setFlashSuccess(false);
+    startTime.current = performance.now();
+  }, [batchNumber, settings.reviewBatchSize, allDueChunks]);
 
   const handleDigit = useCallback(
     (digit: string) => {
-      if (phase === "done") return;
+      if (phase === "done" || phase === "batch-done") return;
 
       if (phase === "result") {
-        // Only allow manual advance on errors (correct auto-advances)
         if (resultMessage.startsWith("✗")) {
           moveToNext();
         }
@@ -114,8 +133,8 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
       const expectedDigit = expected[pos];
 
       if (digit === expectedDigit) {
-        playTone(digit);
-        vibrateLight();
+        if (settings.soundEnabled) playTone(digit);
+        if (settings.hapticsEnabled) vibrateLight();
         setLastResult("correct");
         setLastDigit(digit);
         const newInput = input + digit;
@@ -123,19 +142,20 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
 
         if (newInput.length === 5) {
           const elapsed = performance.now() - startTime.current;
-          playSuccessTone();
-          vibrateSuccess();
+          if (settings.soundEnabled) playSuccessTone();
+          if (settings.hapticsEnabled) vibrateSuccess();
 
           const grade = elapsed < 3000 ? 5 : elapsed < 5000 ? 4 : 3;
 
-          // Compute updated chunk to get fresh interval
           const cs = getChunkState(loadState(), currentChunkIndex);
           const updated = sm2Update(cs, grade);
+          updated.lastLatencyMs = elapsed;
           const intervalDays = Math.max(1, updated.interval);
 
           setAppState((prev) => {
             const csPrev = getChunkState(prev, currentChunkIndex);
             const updatedPrev = sm2Update(csPrev, grade);
+            updatedPrev.lastLatencyMs = elapsed;
             const newState = updateChunkState(prev, updatedPrev);
             saveState(newState);
             return newState;
@@ -148,14 +168,13 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
           );
           setFlashSuccess(true);
 
-          // Auto-advance after 300ms green flash
           autoAdvanceTimer.current = setTimeout(() => {
             moveToNext();
           }, 300);
         }
       } else {
-        playErrorTone();
-        vibrateError();
+        if (settings.soundEnabled) playErrorTone();
+        if (settings.hapticsEnabled) vibrateError();
         setLastResult("error");
         setLastDigit(digit);
 
@@ -179,7 +198,7 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
         setLastDigit(null);
       }, 150);
     },
-    [phase, currentChunkIndex, input, getChunkDigits, moveToNext, resultMessage]
+    [phase, currentChunkIndex, input, getChunkDigits, moveToNext, resultMessage, settings]
   );
 
   // Backspace support
@@ -208,11 +227,12 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
   // Stats
   const now = Date.now();
   const totalLearned = appState.learnedChunkCount;
-  const totalMastered = appState.chunks.filter((c) => c.correctStreak >= 3).length;
-  const totalDue = appState.chunks.filter(
+  const chunkArr = getChunkArray(appState);
+  const totalMastered = chunkArr.filter((c) => c.correctStreak >= 3).length;
+  const totalDue = chunkArr.filter(
     (c) => c.nextReview <= now || c.totalReviews === 0
   ).length;
-  const nextReviewTime = appState.chunks
+  const nextReviewTime = chunkArr
     .filter((c) => c.nextReview > now)
     .sort((a, b) => a.nextReview - b.nextReview)[0]?.nextReview;
 
@@ -224,6 +244,41 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
     if (hours > 0) return `${hours}h ${mins}m`;
     return `${mins}m`;
   };
+
+  // Batch done screen
+  if (phase === "batch-done") {
+    const remainingTotal = allDueChunks.length - batchNumber * settings.reviewBatchSize;
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center py-6 px-4 max-w-md mx-auto">
+        <div className="text-center space-y-4 fade-in">
+          <h1 className="text-2xl font-bold tracking-tight text-gradient-amber">π</h1>
+          <div className="text-4xl">✅</div>
+          <p className="text-sm text-muted-foreground">
+            Batch {batchNumber} complete! Reviewed {reviewedCount} chunks ({correctCount} correct)
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {remainingTotal > 0 ? `${remainingTotal} more chunks due` : "All caught up!"}
+          </p>
+          <div className="flex gap-3">
+            {remainingTotal > 0 && (
+              <button
+                onClick={loadNextBatch}
+                className="flex-1 px-4 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm"
+              >
+                CONTINUE
+              </button>
+            )}
+            <button
+              onClick={onBack}
+              className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm"
+            >
+              DONE
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (phase === "done") {
     return (
@@ -346,14 +401,6 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
 
       {/* Numpad + controls */}
       <div className="w-full space-y-3">
-        <div className="flex justify-center gap-4 mb-1">
-          <button
-            onClick={() => toggleNumpadLayout()}
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 border border-border rounded"
-          >
-            {isCalculatorLayout ? "123↑" : "789↑"}
-          </button>
-        </div>
         <Numpad
           onDigit={handleDigit}
           lastResult={lastResult}

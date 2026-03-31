@@ -4,13 +4,37 @@ import DigitStream from "@/components/DigitStream";
 import StatsBar from "@/components/StatsBar";
 import ChunkLearn from "@/components/ChunkLearn";
 import SpacedRepetition from "@/components/SpacedRepetition";
-import SessionHistory from "@/components/SessionHistory";
+import Dashboard from "@/components/Dashboard";
+import Settings from "@/components/Settings";
+import MatrixChallenge from "@/components/MatrixChallenge";
+import SpeedDrill from "@/components/SpeedDrill";
+import Marathon from "@/components/Marathon";
+import WeakSpots from "@/components/WeakSpots";
 import { getPiDigit, TOTAL_AVAILABLE_DIGITS, ensureDigitsLoaded, isLoaded } from "@/lib/pi";
 import { playTone, playErrorTone, playSuccessTone } from "@/lib/audio";
 import { vibrateLight, vibrateError, vibrateSuccess } from "@/lib/haptics";
-import { loadState, saveState, type AppState, type SessionRecord } from "@/lib/storage";
+import {
+  loadState,
+  saveState,
+  updateStreak,
+  updateDailyRecord,
+  getChunkArray,
+  type AppState,
+  type SessionRecord,
+} from "@/lib/storage";
 
-type AppMode = "menu" | "practice" | "learn" | "review" | "history" | "loading";
+type AppMode =
+  | "menu"
+  | "practice"
+  | "learn"
+  | "review"
+  | "dashboard"
+  | "settings"
+  | "matrix"
+  | "speed"
+  | "marathon"
+  | "weakspots"
+  | "loading";
 
 const PI_RECORDS = [
   { label: "Guinness World Record", holder: "Rajveer Meena 🇮🇳", digits: 70000, year: 2015 },
@@ -42,23 +66,16 @@ function importData(onSuccess: (state: AppState) => void) {
     reader.onload = () => {
       try {
         const data = JSON.parse(reader.result as string);
-        // Validate required fields
-        if (
-          typeof data.bestDigit !== "number" ||
-          !Array.isArray(data.sessions) ||
-          !Array.isArray(data.chunks)
-        ) {
+        if (typeof data.bestDigit !== "number") {
           alert("Invalid backup file: missing required fields.");
           return;
         }
-        // Ensure defaults for optional fields
-        if (!data.numpadLayout) data.numpadLayout = "calculator";
-        if (data.learnedChunkCount == null) data.learnedChunkCount = 0;
-        if (!data.dailyGoal) data.dailyGoal = 50;
-        if (!data.todayDate) data.todayDate = new Date().toISOString().slice(0, 10);
-        if (data.todayDigitsLearned == null) data.todayDigitsLearned = 0;
+        // Ensure new format compatibility
+        if (Array.isArray(data.chunks)) {
+          // Old format — will be migrated by loadState
+        }
         saveState(data as AppState);
-        onSuccess(data as AppState);
+        onSuccess(loadState()); // Re-load to trigger migration
       } catch {
         alert("Failed to parse backup file.");
       }
@@ -79,17 +96,14 @@ export default function Index() {
   const [latencies, setLatencies] = useState<number[]>([]);
   const [showUpcoming, setShowUpcoming] = useState(false);
   const [recordsExpanded, setRecordsExpanded] = useState(false);
-  const isCalculatorLayout = state.numpadLayout === "calculator";
-  const toggleNumpadLayout = useCallback(() => {
-    setState((prev) => {
-      const next = { ...prev, numpadLayout: prev.numpadLayout === "calculator" ? "phone" as const : "calculator" as const };
-      saveState(next);
-      return next;
-    });
-  }, []);
+  const [practiceElapsed, setPracticeElapsed] = useState(0);
+  const [practiceDigits, setPracticeDigits] = useState(0);
+  const settings = state.settings;
+  const isCalculatorLayout = settings.numpadLayout === "calculator";
   const lastTapTime = useRef<number>(0);
   const sessionStart = useRef<number>(0);
   const highestReached = useRef(0);
+  const practiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const avgLatency =
     latencies.length > 0 ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null;
@@ -110,29 +124,50 @@ export default function Index() {
     setLatencies([]);
     setLastResult(null);
     setLastDigit(null);
+    setPracticeElapsed(0);
+    setPracticeDigits(0);
     lastTapTime.current = performance.now();
     sessionStart.current = performance.now();
     highestReached.current = startIdx;
+
+    // Start practice timer
+    practiceTimerRef.current = setInterval(() => {
+      setPracticeElapsed(performance.now() - sessionStart.current);
+    }, 1000);
   }, [state.bestDigit]);
 
   const endSession = useCallback(() => {
+    if (practiceTimerRef.current) {
+      clearInterval(practiceTimerRef.current);
+      practiceTimerRef.current = null;
+    }
+
+    const duration = performance.now() - sessionStart.current;
     const session: SessionRecord = {
       date: new Date().toISOString(),
       digitsReached: highestReached.current,
       avgLatencyMs: avgLatency || 0,
       errors,
-      durationMs: performance.now() - sessionStart.current,
+      durationMs: duration,
     };
 
     setState((prev) => {
       const newBest = Math.max(prev.bestDigit, highestReached.current);
       const newLearned = Math.max(0, highestReached.current - prev.bestDigit);
-      const next: AppState = {
+      let next: AppState = {
         ...prev,
         bestDigit: newBest,
-        sessions: [...prev.sessions.slice(-99), session],
+        sessions: [...prev.sessions.slice(-199), session],
         todayDigitsLearned: prev.todayDigitsLearned + newLearned,
       };
+      next = updateStreak(next);
+      next = updateDailyRecord(next, {
+        digitsLearned: newLearned,
+        totalPracticeMs: duration,
+        errorsTotal: errors,
+        bestDigitReached: highestReached.current,
+        avgLatencyMs: avgLatency || 0,
+      });
       saveState(next);
       return next;
     });
@@ -150,27 +185,28 @@ export default function Index() {
       const expected = getPiDigit(currentIndex);
 
       if (digit === expected) {
-        playTone(digit);
-        vibrateLight();
+        if (settings.soundEnabled) playTone(digit);
+        if (settings.hapticsEnabled) vibrateLight();
         setLastResult("correct");
         setLastDigit(digit);
         setStreak((s) => s + 1);
+        setPracticeDigits((d) => d + 1);
         if (latency < 5000) setLatencies((l) => [...l, latency]);
         const nextIndex = currentIndex + 1;
         highestReached.current = Math.max(highestReached.current, nextIndex);
         setCurrentIndex(nextIndex);
 
         if (nextIndex % 50 === 0) {
-          playSuccessTone();
-          vibrateSuccess();
+          if (settings.soundEnabled) playSuccessTone();
+          if (settings.hapticsEnabled) vibrateSuccess();
         }
 
         if (nextIndex >= TOTAL_AVAILABLE_DIGITS) {
           endSession();
         }
       } else {
-        playErrorTone();
-        vibrateError();
+        if (settings.soundEnabled) playErrorTone();
+        if (settings.hapticsEnabled) vibrateError();
         setLastResult("error");
         setLastDigit(digit);
         setStreak(0);
@@ -182,7 +218,7 @@ export default function Index() {
         setLastDigit(null);
       }, 150);
     },
-    [mode, currentIndex, endSession]
+    [mode, currentIndex, endSession, settings]
   );
 
   // Keyboard support
@@ -200,6 +236,18 @@ export default function Index() {
     return () => window.removeEventListener("keydown", handler);
   }, [mode, handleDigit, startPractice, endSession]);
 
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (practiceTimerRef.current) clearInterval(practiceTimerRef.current);
+    };
+  }, []);
+
+  const returnToMenu = useCallback(() => {
+    setState(loadState());
+    setMode("menu");
+  }, []);
+
   // Loading screen
   if (mode === "loading") {
     return (
@@ -212,32 +260,44 @@ export default function Index() {
     );
   }
 
-  // Learn mode
-  if (mode === "learn") {
-    return <ChunkLearn onBack={() => { setState(loadState()); setMode("menu"); }} />;
-  }
-
-  // Review mode
-  if (mode === "review") {
-    return <SpacedRepetition onBack={() => { setState(loadState()); setMode("menu"); }} />;
-  }
-
-  // Session history
-  if (mode === "history") {
-    return <SessionHistory state={state} onBack={() => setMode("menu")} />;
-  }
+  // Delegate modes
+  if (mode === "learn") return <ChunkLearn onBack={returnToMenu} />;
+  if (mode === "review") return <SpacedRepetition onBack={returnToMenu} />;
+  if (mode === "dashboard") return <Dashboard onBack={returnToMenu} />;
+  if (mode === "settings") return <Settings onBack={returnToMenu} />;
+  if (mode === "matrix") return <MatrixChallenge onBack={returnToMenu} />;
+  if (mode === "speed") return <SpeedDrill onBack={returnToMenu} />;
+  if (mode === "marathon") return <Marathon onBack={returnToMenu} />;
+  if (mode === "weakspots") return <WeakSpots onBack={returnToMenu} />;
 
   // Menu
   if (mode === "menu") {
-    const dueCount = state.chunks.filter(
-      (c) => c.nextReview <= Date.now() || c.totalReviews === 0
+    const chunkArr = getChunkArray(state);
+    const dueCount = chunkArr.filter(
+      (c) => c.chunkIndex < state.learnedChunkCount && (c.nextReview <= Date.now() || c.totalReviews === 0)
     ).length;
-    const unlearnedDue = Math.max(0, state.learnedChunkCount - state.chunks.length);
+    // Also count learned chunks that have no ChunkState entry yet
+    const trackedChunks = new Set(chunkArr.map((c) => c.chunkIndex));
+    let unlearnedDue = 0;
+    for (let i = 0; i < state.learnedChunkCount; i++) {
+      if (!trackedChunks.has(i)) unlearnedDue++;
+    }
     const totalDue = dueCount + unlearnedDue;
 
     return (
       <div className="min-h-screen flex flex-col items-center justify-center py-6 px-4 max-w-md mx-auto">
-        <header className="text-center space-y-1 mb-8">
+        {/* Settings gear - top right */}
+        <div className="w-full max-w-xs flex justify-end mb-2">
+          <button
+            onClick={() => setMode("settings")}
+            className="text-muted-foreground hover:text-foreground transition-colors p-1"
+            title="Settings"
+          >
+            ⚙️
+          </button>
+        </div>
+
+        <header className="text-center space-y-1 mb-6">
           <h1 className="text-4xl font-bold tracking-tight text-gradient-amber">π</h1>
           <p className="text-xs text-muted-foreground tracking-widest uppercase">
             pi memorization trainer
@@ -253,70 +313,114 @@ export default function Index() {
             <div className="text-xs text-muted-foreground tracking-widest uppercase">
               digits memorized
             </div>
+            {state.currentDayStreak > 0 && (
+              <div className="text-xs text-primary">
+                🔥 {state.currentDayStreak} day streak
+              </div>
+            )}
           </div>
 
-          {/* Mode buttons */}
-          <div className="space-y-3">
-            {/* Practice */}
-            <div className="space-y-2">
-              <div className="flex gap-3">
-                <button
-                  onClick={() => startPractice(false)}
-                  className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
-                >
-                  FROM 0
-                </button>
-                <button
-                  onClick={() => startPractice(true)}
-                  className="flex-1 px-4 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
-                >
-                  CONTINUE
-                </button>
-              </div>
-              <div className="text-[10px] text-muted-foreground">
-                sequential practice — type digits of pi in order
-              </div>
+          {/* TRAIN section */}
+          <div className="space-y-2">
+            <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
+              Train
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => startPractice(false)}
+                className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
+              >
+                FROM 0
+              </button>
+              <button
+                onClick={() => startPractice(true)}
+                className="flex-1 px-4 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity"
+              >
+                CONTINUE
+              </button>
             </div>
 
-            {/* Learn */}
             <button
               onClick={() => setMode("learn")}
               className="w-full px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
             >
-              LEARN CHUNKS
+              📚 LEARN CHUNKS
               <span className="block text-[10px] font-normal text-muted-foreground mt-0.5">
-                learn 5-digit blocks with interleaved review
-                {state.learnedChunkCount > 0 && ` · ${state.learnedChunkCount} learned`}
+                {state.learnedChunkCount > 0 ? `${state.learnedChunkCount} learned` : "learn new digit blocks"}
               </span>
             </button>
 
-            {/* Review */}
             <button
               onClick={() => setMode("review")}
               className="w-full px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
             >
-              REVIEW
+              🔄 REVIEW
               {totalDue > 0 && (
                 <span className="ml-2 inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-bold bg-primary text-primary-foreground rounded-full">
                   {totalDue}
                 </span>
               )}
               <span className="block text-[10px] font-normal text-muted-foreground mt-0.5">
-                spaced repetition of learned chunks
-                {totalDue > 0 ? ` · ${totalDue} due` : " · all caught up"}
+                {totalDue > 0 ? `${totalDue} due` : "all caught up"}
               </span>
             </button>
+          </div>
 
-            {/* History */}
-            <button
-              onClick={() => setMode("history")}
-              className="w-full px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
-            >
-              📊 HISTORY
-              <span className="block text-[10px] font-normal text-muted-foreground mt-0.5">
-                {state.sessions.length} session{state.sessions.length !== 1 ? "s" : ""} recorded
-              </span>
-            </button>
+          {/* CHALLENGE section */}
+          <div className="space-y-2">
+            <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
+              Challenge
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => setMode("matrix")}
+                className="px-2 py-3 bg-muted text-foreground rounded-lg font-semibold text-xs tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                ⚔️
+                <span className="block text-[9px] font-normal text-muted-foreground mt-0.5">
+                  MATRIX
+                </span>
+              </button>
+              <button
+                onClick={() => setMode("speed")}
+                className="px-2 py-3 bg-muted text-foreground rounded-lg font-semibold text-xs tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                ⚡
+                <span className="block text-[9px] font-normal text-muted-foreground mt-0.5">
+                  SPEED
+                </span>
+              </button>
+              <button
+                onClick={() => setMode("marathon")}
+                className="px-2 py-3 bg-muted text-foreground rounded-lg font-semibold text-xs tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                🏔️
+                <span className="block text-[9px] font-normal text-muted-foreground mt-0.5">
+                  MARATHON
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* INSIGHTS section */}
+          <div className="space-y-2">
+            <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-semibold">
+              Insights
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setMode("dashboard")}
+                className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                📊 DASHBOARD
+              </button>
+              <button
+                onClick={() => setMode("weakspots")}
+                className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm tracking-wide hover:opacity-90 transition-opacity border border-border"
+              >
+                🎯 WEAK SPOTS
+              </button>
+            </div>
           </div>
 
           {/* Records section */}
@@ -357,7 +461,7 @@ export default function Index() {
             )}
           </div>
 
-          {/* Quick stats */}
+          {/* Quick hints */}
           {state.sessions.length > 0 && (
             <div className="text-[10px] text-muted-foreground/50 space-y-0.5">
               <div>enter · continue practice &nbsp;&nbsp; esc · stop</div>
@@ -385,11 +489,18 @@ export default function Index() {
   }
 
   // Practice mode
+  const dpm = practiceElapsed > 0 ? (practiceDigits / (practiceElapsed / 60000)).toFixed(1) : "0.0";
+  const practiceTimeStr = formatPracticeTime(practiceElapsed);
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-between py-6 px-4 max-w-md mx-auto">
       {/* Header */}
-      <header className="text-center space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight text-gradient-amber">π</h1>
+      <header className="text-center space-y-1 w-full">
+        <div className="flex justify-between items-center px-2">
+          <div className="text-xs text-muted-foreground">{dpm} d/min</div>
+          <h1 className="text-2xl font-bold tracking-tight text-gradient-amber">π</h1>
+          <div className="text-xs font-mono text-muted-foreground">{practiceTimeStr}</div>
+        </div>
         <p className="text-xs text-muted-foreground tracking-widest uppercase">
           practice · reciting
         </p>
@@ -408,7 +519,7 @@ export default function Index() {
           avgLatency={avgLatency}
           errors={errors}
           todayLearned={state.todayDigitsLearned}
-          dailyGoal={state.dailyGoal}
+          dailyGoal={settings.dailyGoal}
         />
       </div>
 
@@ -420,12 +531,6 @@ export default function Index() {
             className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 border border-border rounded"
           >
             {showUpcoming ? "hide" : "unhide"} digits
-          </button>
-          <button
-            onClick={toggleNumpadLayout}
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 border border-border rounded"
-          >
-            {isCalculatorLayout ? "123↑" : "789↑"}
           </button>
         </div>
         <Numpad
@@ -443,4 +548,11 @@ export default function Index() {
       </div>
     </div>
   );
+}
+
+function formatPracticeTime(ms: number): string {
+  const totalSecs = Math.floor(ms / 1000);
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }

@@ -8,6 +8,7 @@ import {
   saveState,
   getChunkState,
   updateChunkState,
+  getChunkArray,
   type AppState,
   type ChunkState,
 } from "@/lib/storage";
@@ -16,7 +17,7 @@ interface ChunkLearnProps {
   onBack: () => void;
 }
 
-type Phase = "study" | "test" | "error";
+type Phase = "study" | "test" | "error" | "review-prompt";
 
 interface QueueItem {
   chunkIndex: number;
@@ -26,35 +27,34 @@ interface QueueItem {
   boundaryLength?: number;
 }
 
-const CHUNK_SIZE = 5;
 const BOUNDARY_OVERLAP = 3;
-const BOUNDARY_LENGTH = BOUNDARY_OVERLAP * 2;
 
-function getChunkDigits(chunkIndex: number): string {
-  return getPiDigits(chunkIndex * CHUNK_SIZE, CHUNK_SIZE);
+function getChunkSize(state: AppState): number {
+  return state.settings.chunkSize;
+}
+
+function getChunkDigits(chunkIndex: number, chunkSize: number): string {
+  return getPiDigits(chunkIndex * chunkSize, chunkSize);
 }
 
 export default function ChunkLearn({ onBack }: ChunkLearnProps) {
   const [appState, setAppState] = useState<AppState>(loadState);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
-  const [phase, setPhase] = useState<Phase>("study");
+  const [phase, setPhase] = useState<Phase>("review-prompt"); // Start with review check
   const [input, setInput] = useState("");
   const [lastResult, setLastResult] = useState<"correct" | "error" | null>(null);
   const [lastDigit, setLastDigit] = useState<string | null>(null);
   const [chunksLearnedThisSession, setChunksLearnedThisSession] = useState(0);
-  const isCalculatorLayout = appState.numpadLayout === "calculator";
-  const toggleNumpadLayout = useCallback(() => {
-    setAppState((prev) => {
-      const next = { ...prev, numpadLayout: prev.numpadLayout === "calculator" ? "phone" as const : "calculator" as const };
-      saveState(next);
-      return next;
-    });
-  }, []);
   const [flashSuccess, setFlashSuccess] = useState(false);
+  const [dueCount, setDueCount] = useState(0);
   const startTime = useRef(0);
+  const settings = appState.settings;
+  const chunkSize = settings.chunkSize;
+  const isCalculatorLayout = settings.numpadLayout === "calculator";
+  const boundaryLength = BOUNDARY_OVERLAP * 2;
 
-  // Ref to always have current queue for closures (fixes stale closure bug)
+  // Ref to always have current queue for closures
   const queueRef = useRef<QueueItem[]>([]);
   queueRef.current = queue;
 
@@ -64,22 +64,22 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
   const getCurrentDigits = useCallback((item: QueueItem | null): string => {
     if (!item) return "";
     if (item.isBoundary && item.boundaryStart !== undefined) {
-      return getPiDigits(item.boundaryStart, item.boundaryLength ?? BOUNDARY_LENGTH);
+      return getPiDigits(item.boundaryStart, item.boundaryLength ?? boundaryLength);
     }
-    return getChunkDigits(item.chunkIndex);
-  }, []);
+    return getChunkDigits(item.chunkIndex, chunkSize);
+  }, [chunkSize, boundaryLength]);
 
   const getCurrentLabel = useCallback((item: QueueItem | null): string => {
     if (!item) return "";
     if (item.isBoundary) {
-      const len = item.boundaryLength ?? BOUNDARY_LENGTH;
-      if (len === CHUNK_SIZE * 2) {
+      const len = item.boundaryLength ?? boundaryLength;
+      if (len === chunkSize * 2) {
         return `merge ${item.chunkIndex + 1}–${item.chunkIndex + 2}`;
       }
       return `⚡ seam ${item.chunkIndex + 1}|${item.chunkIndex + 2}`;
     }
     return `chunk ${item.chunkIndex + 1}`;
-  }, []);
+  }, [chunkSize, boundaryLength]);
 
   const startItem = useCallback((item: QueueItem) => {
     setCurrentItem(item);
@@ -103,8 +103,8 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
           chunkIndex: justLearnedIdx - 1,
           isNew: false,
           isBoundary: true,
-          boundaryStart: (justLearnedIdx - 1) * CHUNK_SIZE + (CHUNK_SIZE - BOUNDARY_OVERLAP),
-          boundaryLength: BOUNDARY_LENGTH,
+          boundaryStart: (justLearnedIdx - 1) * chunkSize + (chunkSize - BOUNDARY_OVERLAP),
+          boundaryLength: boundaryLength,
         });
       }
 
@@ -121,8 +121,8 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
             chunkIndex: i,
             isNew: false,
             isBoundary: true,
-            boundaryStart: i * CHUNK_SIZE,
-            boundaryLength: CHUNK_SIZE * 2,
+            boundaryStart: i * chunkSize,
+            boundaryLength: chunkSize * 2,
           });
         }
       }
@@ -131,13 +131,35 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
       return items;
     },
-    []
+    [chunkSize, boundaryLength]
   );
 
-  // Build initial queue on mount
+  // Check for due reviews on mount
   useEffect(() => {
     const state = loadState();
     setAppState(state);
+
+    const now = Date.now();
+    const chunks = getChunkArray(state);
+    const due = chunks.filter(
+      (c) => c.chunkIndex < state.learnedChunkCount && (c.nextReview <= now || c.totalReviews === 0)
+    ).length;
+    setDueCount(due);
+
+    if (due > 10) {
+      // Suggest reviewing first
+      setPhase("review-prompt");
+    } else {
+      // Go straight to learning
+      const nextChunkIdx = state.learnedChunkCount;
+      const firstItem: QueueItem = { chunkIndex: nextChunkIdx, isNew: true };
+      setQueue([firstItem]);
+      startItem(firstItem);
+    }
+  }, [startItem]);
+
+  const skipReviewPrompt = useCallback(() => {
+    const state = loadState();
     const nextChunkIdx = state.learnedChunkCount;
     const firstItem: QueueItem = { chunkIndex: nextChunkIdx, isNew: true };
     setQueue([firstItem]);
@@ -146,7 +168,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
   const advanceToNext = useCallback(
     (passed: boolean, failedItem?: QueueItem) => {
-      // Use ref to get current queue (avoids stale closure)
       const currentQueue = queueRef.current;
       let newQueue = [...currentQueue.slice(1)];
 
@@ -187,20 +208,20 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
         startTime.current = performance.now();
         const expected = getCurrentDigits(currentItem);
         if (digit === expected[0]) {
-          playTone(digit);
-          vibrateLight();
+          if (settings.soundEnabled) playTone(digit);
+          if (settings.hapticsEnabled) vibrateLight();
           setLastResult("correct");
           setLastDigit(digit);
           setInput(digit);
           if (expected.length === 1) {
-            playSuccessTone();
-            vibrateSuccess();
+            if (settings.soundEnabled) playSuccessTone();
+            if (settings.hapticsEnabled) vibrateSuccess();
             setFlashSuccess(true);
             setTimeout(() => advanceToNext(true), 300);
           }
         } else {
-          playErrorTone();
-          vibrateError();
+          if (settings.soundEnabled) playErrorTone();
+          if (settings.hapticsEnabled) vibrateError();
           setLastResult("error");
           setLastDigit(digit);
           setPhase("error");
@@ -229,16 +250,17 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
       const expectedDigit = expected[pos];
 
       if (digit === expectedDigit) {
-        playTone(digit);
-        vibrateLight();
+        if (settings.soundEnabled) playTone(digit);
+        if (settings.hapticsEnabled) vibrateLight();
         setLastResult("correct");
         setLastDigit(digit);
         const newInput = input + digit;
         setInput(newInput);
 
         if (newInput.length === expected.length) {
-          playSuccessTone();
-          vibrateSuccess();
+          const elapsed = performance.now() - startTime.current;
+          if (settings.soundEnabled) playSuccessTone();
+          if (settings.hapticsEnabled) vibrateSuccess();
           setFlashSuccess(true);
 
           if (!currentItem.isBoundary) {
@@ -249,6 +271,7 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
                 correctStreak: cs.correctStreak + 1,
                 totalReviews: cs.totalReviews + 1,
                 totalCorrect: cs.totalCorrect + 1,
+                lastLatencyMs: elapsed,
               };
               let newState = updateChunkState(prev, updated);
               if (currentItem.isNew) {
@@ -268,8 +291,8 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
           setTimeout(() => advanceToNext(true), 300);
         }
       } else {
-        playErrorTone();
-        vibrateError();
+        if (settings.soundEnabled) playErrorTone();
+        if (settings.hapticsEnabled) vibrateError();
         setLastResult("error");
         setLastDigit(digit);
 
@@ -288,7 +311,7 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
       setTimeout(() => { setLastResult(null); setLastDigit(null); }, 150);
     },
-    [phase, currentItem, input, getCurrentDigits, advanceToNext]
+    [phase, currentItem, input, getCurrentDigits, advanceToNext, settings]
   );
 
   // Keyboard support
@@ -304,6 +327,8 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
           startTime.current = performance.now();
         } else if (phase === "error") {
           advanceToNext(false, currentItemRef.current ?? undefined);
+        } else if (phase === "review-prompt") {
+          skipReviewPrompt();
         }
       } else if (e.key === "Escape") {
         onBack();
@@ -311,7 +336,37 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleDigit, handleBackspace, phase, advanceToNext, onBack]);
+  }, [handleDigit, handleBackspace, phase, advanceToNext, onBack, skipReviewPrompt]);
+
+  // Review prompt
+  if (phase === "review-prompt") {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center py-6 px-4 max-w-md mx-auto">
+        <div className="text-center space-y-4 fade-in">
+          <h1 className="text-2xl font-bold tracking-tight text-gradient-amber">π</h1>
+          <div className="text-2xl">📋</div>
+          <p className="text-sm text-muted-foreground">
+            You have <span className="text-primary font-bold">{dueCount}</span> chunks due for review.
+          </p>
+          <p className="text-xs text-muted-foreground">Review first to strengthen memory?</p>
+          <div className="flex gap-3">
+            <button
+              onClick={onBack}
+              className="flex-1 px-4 py-3 bg-primary text-primary-foreground rounded-lg font-semibold text-sm"
+            >
+              REVIEW FIRST
+            </button>
+            <button
+              onClick={skipReviewPrompt}
+              className="flex-1 px-4 py-3 bg-muted text-foreground rounded-lg font-semibold text-sm"
+            >
+              LEARN NEW
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentItem) {
     return (
@@ -330,7 +385,8 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
   const digits = getCurrentDigits(currentItem);
   const label = getCurrentLabel(currentItem);
-  const masteredCount = appState.chunks.filter((c) => c.correctStreak >= 3).length;
+  const chunkArr = getChunkArray(appState);
+  const masteredCount = chunkArr.filter((c) => c.correctStreak >= 3).length;
 
   return (
     <div className={`min-h-screen flex flex-col items-center justify-between py-6 px-4 max-w-md mx-auto transition-colors duration-300 ${flashSuccess ? "bg-green-900/20" : ""}`}>
@@ -354,7 +410,7 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
                 {digits}
               </div>
               <div className="text-[10px] text-muted-foreground">
-                digits {currentItem.chunkIndex * CHUNK_SIZE + 1}–{currentItem.chunkIndex * CHUNK_SIZE + CHUNK_SIZE}
+                digits {currentItem.chunkIndex * chunkSize + 1}–{currentItem.chunkIndex * chunkSize + chunkSize}
                 {" · "}just start typing
               </div>
             </div>
@@ -424,14 +480,6 @@ export default function ChunkLearn({ onBack }: ChunkLearnProps) {
 
       {/* Numpad */}
       <div className="w-full space-y-3">
-        <div className="flex justify-center gap-4 mb-1">
-          <button
-            onClick={toggleNumpadLayout}
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 border border-border rounded"
-          >
-            {isCalculatorLayout ? "123↑" : "789↑"}
-          </button>
-        </div>
         <Numpad
           onDigit={handleDigit}
           lastResult={lastResult}
