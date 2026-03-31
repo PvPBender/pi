@@ -28,7 +28,14 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
   const [resultMessage, setResultMessage] = useState("");
   const [reviewedCount, setReviewedCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
-  const [flippedNumpad, setFlippedNumpad] = useState(false);
+  const isCalculatorLayout = appState.numpadLayout === "calculator";
+  const toggleNumpadLayout = useCallback(() => {
+    setAppState((prev) => {
+      const next = { ...prev, numpadLayout: prev.numpadLayout === "calculator" ? "phone" as const : "calculator" as const };
+      saveState(next);
+      return next;
+    });
+  }, []);
   const startTime = useRef(0);
 
   // Calculate due chunks on mount
@@ -313,17 +320,17 @@ export default function SpacedRepetition({ onBack }: SpacedRepetitionProps) {
       <div className="w-full space-y-3">
         <div className="flex justify-center gap-4 mb-1">
           <button
-            onClick={() => setFlippedNumpad((v) => !v)}
+            onClick={() => toggleNumpadLayout()}
             className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 border border-border rounded"
           >
-            {flippedNumpad ? "123↑" : "789↑"}
+            {isCalculatorLayout ? "123↑" : "789↑"}
           </button>
         </div>
         <Numpad
           onDigit={handleDigit}
           lastResult={lastResult}
           lastDigit={lastDigit}
-          flipped={flippedNumpad}
+          flipped={isCalculatorLayout}
         />
         <button
           onClick={onBack}

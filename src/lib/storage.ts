@@ -24,6 +24,7 @@ export interface AppState {
   todayDate: string;
   chunks: ChunkState[];
   learnedChunkCount: number; // how many chunks have been introduced in Learn mode
+  numpadLayout: "phone" | "calculator"; // phone=123 top, calculator=789 top (123 bottom)
 }
 
 const STORAGE_KEY = "pi-trainer-state";
@@ -36,6 +37,7 @@ const defaultState: AppState = {
   todayDate: new Date().toISOString().slice(0, 10),
   chunks: [],
   learnedChunkCount: 0,
+  numpadLayout: "calculator",
 };
 
 export function loadState(): AppState {
@@ -52,6 +54,7 @@ export function loadState(): AppState {
     // Ensure new fields exist for old state
     if (!state.chunks) state.chunks = [];
     if (state.learnedChunkCount == null) state.learnedChunkCount = 0;
+    if (!state.numpadLayout) state.numpadLayout = "calculator";
     return state;
   } catch {
     return { ...defaultState };

@@ -20,7 +20,14 @@ export default function Index() {
   const [mode, setMode] = useState<AppMode>("loading");
   const [latencies, setLatencies] = useState<number[]>([]);
   const [showUpcoming, setShowUpcoming] = useState(false);
-  const [flippedNumpad, setFlippedNumpad] = useState(false);
+  const isCalculatorLayout = state.numpadLayout === "calculator";
+  const toggleNumpadLayout = useCallback(() => {
+    setState((prev) => {
+      const next = { ...prev, numpadLayout: prev.numpadLayout === "calculator" ? "phone" as const : "calculator" as const };
+      saveState(next);
+      return next;
+    });
+  }, []);
   const lastTapTime = useRef<number>(0);
   const sessionStart = useRef<number>(0);
   const highestReached = useRef(0);
@@ -289,17 +296,17 @@ export default function Index() {
             {showUpcoming ? "hide" : "unhide"} digits
           </button>
           <button
-            onClick={() => setFlippedNumpad((v) => !v)}
+            onClick={toggleNumpadLayout}
             className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 border border-border rounded"
           >
-            {flippedNumpad ? "123↑" : "789↑"}
+            {isCalculatorLayout ? "123↑" : "789↑"}
           </button>
         </div>
         <Numpad
           onDigit={handleDigit}
           lastResult={lastResult}
           lastDigit={lastDigit}
-          flipped={flippedNumpad}
+          flipped={isCalculatorLayout}
         />
         <button
           onClick={endSession}
