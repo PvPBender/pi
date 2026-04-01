@@ -6,7 +6,7 @@ import {
   type AppState,
   type ChunkState,
 } from "@/lib/storage";
-import { getPiDigits, TOTAL_AVAILABLE_DIGITS } from "@/lib/pi";
+import { getPiDigits, TOTAL_AVAILABLE_DIGITS, ensureDigitsLoaded, isLoaded } from "@/lib/pi";
 import { rateChunkDifficulty, getDifficultyColor, getDifficultyLabel } from "@/lib/difficulty";
 import ForgettingCurve from "@/components/ForgettingCurve";
 
@@ -89,10 +89,14 @@ export default function DigitBrowser({
   const [selectedChunk, setSelectedChunk] = useState(0);
   const [page, setPage] = useState(0);
   const [showForgettingCurve, setShowForgettingCurve] = useState(false);
+  const [digitsReady, setDigitsReady] = useState(isLoaded());
 
-  // Refresh state on mount
+  // Ensure digits are loaded and refresh state on mount
   useEffect(() => {
     setState(loadState());
+    if (!isLoaded()) {
+      ensureDigitsLoaded().then(() => setDigitsReady(true));
+    }
   }, []);
 
   // Total learned digits
@@ -135,6 +139,18 @@ export default function DigitBrowser({
         chunk={cs}
         onClose={() => setShowForgettingCurve(false)}
       />
+    );
+  }
+
+  // Loading guard — digits must be loaded for Level 1 and 2
+  if (!digitsReady && level > 0) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center py-6 px-4 max-w-md mx-auto">
+        <h1 className="text-2xl font-bold tracking-tight text-gradient-amber">π</h1>
+        <p className="text-sm text-muted-foreground mt-4 animate-pulse">
+          Loading digits…
+        </p>
+      </div>
     );
   }
 
@@ -319,6 +335,7 @@ export default function DigitBrowser({
           >
             {chunkIndices.map((ci) => {
               const digits = getPiDigits(ci * CHUNK_SIZE, CHUNK_SIZE);
+              if (!digits) return null;
               const masteryClass = getChunkMasteryClass(ci, state);
 
               return (
