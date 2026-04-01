@@ -102,6 +102,19 @@ export default function DigitBrowser({
   // Total learned digits
   const totalLearned = state.learnedChunkCount * CHUNK_SIZE;
 
+  // Level 0 data — MUST be before any early returns (React hooks rules)
+  const totalPages = Math.ceil(TOTAL_BLOCKS / BLOCKS_PER_PAGE);
+  const l0startBlock = page * BLOCKS_PER_PAGE;
+  const l0endBlock = Math.min(l0startBlock + BLOCKS_PER_PAGE, TOTAL_BLOCKS);
+
+  const blockMasteries = useMemo(() => {
+    const result: BlockMastery[] = [];
+    for (let i = l0startBlock; i < l0endBlock; i++) {
+      result.push(getBlockMastery(i, state));
+    }
+    return result;
+  }, [l0startBlock, l0endBlock, state]);
+
   // Keyboard support
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -365,18 +378,6 @@ export default function DigitBrowser({
   }
 
   // ─── Level 0: Bird's Eye ──────────────────────────
-  const totalPages = Math.ceil(TOTAL_BLOCKS / BLOCKS_PER_PAGE);
-  const startBlock = page * BLOCKS_PER_PAGE;
-  const endBlock = Math.min(startBlock + BLOCKS_PER_PAGE, TOTAL_BLOCKS);
-
-  const blockMasteries = useMemo(() => {
-    const result: BlockMastery[] = [];
-    for (let i = startBlock; i < endBlock; i++) {
-      result.push(getBlockMastery(i, state));
-    }
-    return result;
-  }, [startBlock, endBlock, state]);
-
   return (
     <div className="min-h-screen flex flex-col items-center justify-between py-6 px-4 max-w-md mx-auto">
       <header className="text-center space-y-1 w-full">
@@ -421,7 +422,7 @@ export default function DigitBrowser({
           }}
         >
           {blockMasteries.map((mastery, i) => {
-            const blockIdx = startBlock + i;
+            const blockIdx = l0startBlock + i;
             const color = getMasteryColor(mastery);
 
             return (
@@ -455,7 +456,7 @@ export default function DigitBrowser({
             ← prev
           </button>
           <span className="text-xs text-muted-foreground">
-            {startBlock.toLocaleString()}–{endBlock.toLocaleString()} of{" "}
+            {l0startBlock.toLocaleString()}–{l0endBlock.toLocaleString()} of{" "}
             {TOTAL_BLOCKS.toLocaleString()} blocks
           </span>
           <button
